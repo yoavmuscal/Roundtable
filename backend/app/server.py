@@ -75,9 +75,22 @@ def speakerkit_command() -> list[str]:
     return [binary, "diarize", "--audio-path", "{wav}", "--num-speakers", "{speakers}", "--rttm-path", "{rttm}"]
 
 
+NO_CACHE_PATHS = {"/", "/index.html", "/sw.js", "/manifest.webmanifest"}
+
+
 def mount_ui(app: FastAPI) -> FastAPI:
     """Serve the production React build from the same localhost origin as the API."""
     if DIST_DIR.is_dir():
+
+        @app.middleware("http")
+        async def no_cache_entry_files(request: Request, call_next):  # noqa: ANN001, ANN202
+            # Hashed /assets/* files can be cached forever; the page and service worker
+            # must always be fresh or the browser keeps running an old build.
+            response = await call_next(request)
+            if request.url.path in NO_CACHE_PATHS:
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return response
+
         app.mount("/", StaticFiles(directory=DIST_DIR, html=True), name="roundtable-ui")
     return app
 

@@ -649,3 +649,4 @@ h1 { margin-bottom: 1rem; font-size: clamp(1.8rem, 3.4vw, 2.9rem); line-height: 
 .sentence-heard strong { display: block; color: #a7f3d0; }
 .sentence-heard small { color: var(--text-soft); font-size: 0.78rem; }
 .voice-pending { margin: 0.8rem 0 0; color: var(--text-faint); font-size: 0.76rem; }
+.build-line { color: var(--text-faint) !important; font-size: 0.6rem !important; }

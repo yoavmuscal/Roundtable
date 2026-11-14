@@ -25,6 +25,7 @@ export function OnDeviceCard() {
           </p>
         ) : null}
         <p>RAM {ram ? ram.toFixed(1) : '—'} / 8 GB</p>
+        <p className="build-line">Build {__BUILD_ID__}</p>
         <p className="network-line"><span /> {connected ? `Network: ${status.network}` : 'Backend offline'}</p>
       </div>
     </section>
