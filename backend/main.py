@@ -4,11 +4,13 @@ import asyncio
 import contextlib
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .calibration import validate_calibration
 from .contract import CONTRACT_VERSION, DEFAULT_PEOPLE
@@ -147,6 +149,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     )
     except WebSocketDisconnect:
         await cancel_task(replay_task)
+
+
+DIST_DIR = Path(__file__).resolve().parent.parent / 'dist'
+if DIST_DIR.exists():
+    app.mount('/', StaticFiles(directory=DIST_DIR, html=True), name='roundtable-ui')
 
 
 def main() -> None:

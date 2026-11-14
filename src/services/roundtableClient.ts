@@ -11,8 +11,15 @@ class RoundtableClient {
   private reconnectTimer?: number;
   private samples: ClockSample[] = [];
   private manuallyClosed = false;
+  private connectionGeneration = 0;
 
   connect(): void {
+    if (
+      this.socket &&
+      (this.socket.readyState === WebSocket.CONNECTING || this.socket.readyState === WebSocket.OPEN)
+    ) {
+      return;
+    }
     this.manuallyClosed = false;
     this.openSocket();
   }
@@ -21,7 +28,9 @@ class RoundtableClient {
     this.manuallyClosed = true;
     window.clearTimeout(this.reconnectTimer);
     window.clearInterval(this.pingTimer);
-    this.socket?.close();
+    const socket = this.socket;
+    this.socket = undefined;
+    socket?.close();
   }
 
   send(message: ClientMessage): boolean {
@@ -47,12 +56,14 @@ class RoundtableClient {
   }
 
   private openSocket(): void {
+    const generation = ++this.connectionGeneration;
     const store = useRoundtableStore.getState();
     store.setConnected(false, 'Connecting to local backend…');
     const socket = new WebSocket(WS_URL);
     this.socket = socket;
 
     socket.addEventListener('open', () => {
+      if (generation !== this.connectionGeneration) return;
       this.samples = [];
       this.send({ type: 'hello', client: 'roundtable-ui', version: CONTRACT_VERSION });
       useRoundtableStore.getState().setConnected(true, 'Connected locally');
@@ -60,6 +71,7 @@ class RoundtableClient {
     });
 
     socket.addEventListener('message', (event) => {
+      if (generation !== this.connectionGeneration) return;
       try {
         const message = JSON.parse(event.data as string) as ServerMessage;
         if (message.type === 'pong') {
@@ -77,6 +89,7 @@ class RoundtableClient {
     });
 
     socket.addEventListener('close', () => {
+      if (generation !== this.connectionGeneration) return;
       window.clearInterval(this.pingTimer);
       useRoundtableStore.getState().setConnected(false, 'Local backend disconnected');
       if (!this.manuallyClosed) {
@@ -85,6 +98,7 @@ class RoundtableClient {
     });
 
     socket.addEventListener('error', () => {
+      if (generation !== this.connectionGeneration) return;
       useRoundtableStore.getState().setConnected(false, 'Cannot reach local backend on :8000');
     });
   }

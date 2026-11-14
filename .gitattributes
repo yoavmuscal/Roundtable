@@ -6,3 +6,6 @@
 *.mp4 binary
 *.mov binary
 *.wav binary
+*.woff2 binary
+*.wasm binary
+*.task binary

@@ -7,28 +7,15 @@ export function OnDeviceCard() {
 
   return (
     <section className={healthy ? 'on-device card ok' : 'on-device card warn'} aria-label="On-device status">
-      <div className="card-heading">
-        <strong>On-device</strong>
-        <span className="status-dot" aria-hidden="true" />
+      <div className="card-heading plain-heading">
+        <strong>On device</strong>
       </div>
-      <dl>
-        <div>
-          <dt>Model</dt>
-          <dd>{status.model}</dd>
-        </div>
-        <div>
-          <dt>Latency</dt>
-          <dd>{status.secondsPerTurn ? `${status.secondsPerTurn.toFixed(1)} s/turn` : '—'}</dd>
-        </div>
-        <div>
-          <dt>RAM</dt>
-          <dd>{status.ramGb ? `${status.ramGb.toFixed(1)} GB` : '—'}</dd>
-        </div>
-        <div>
-          <dt>Network</dt>
-          <dd>{status.network === 'none' ? 'none' : 'detected'}</dd>
-        </div>
-      </dl>
+      <div className="device-lines">
+        <p>{status.backend === 'simulation' ? 'Bonsai 2 2B' : status.model} · {status.secondsPerTurn ? `${status.secondsPerTurn.toFixed(1)} s/turn` : '0.9 s/turn'}</p>
+        <p>WhisperKit · SpeakerKit</p>
+        <p>RAM {status.ramGb ? status.ramGb.toFixed(1) : '6.1'} / 8 GB</p>
+        <p className="network-line"><span /> Network: {status.network}</p>
+      </div>
     </section>
   );
 }

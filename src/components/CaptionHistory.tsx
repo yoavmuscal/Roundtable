@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { formatClock } from '../lib/map';
+import { CaptionText } from '../lib/nameText';
 import { ShapeGlyph } from '../lib/shape';
 import { useRoundtableStore } from '../state/store';
 
@@ -46,7 +47,7 @@ export function CaptionHistory() {
                   <strong>{person?.name ?? 'Unknown'}</strong>
                   <span>{formatClock(caption.start)}</span>
                 </div>
-                <p>{caption.text}</p>
+                <p><CaptionText text={caption.text} people={people} /></p>
                 {caption.nameAlert ? <em>Name alert</em> : null}
               </article>
             );

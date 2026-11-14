@@ -1,0 +1,18 @@
+{
+  "name": "Roundtable",
+  "short_name": "Roundtable",
+  "description": "Live, offline speaker-pinned captions and meeting maps.",
+  "start_url": "/?screen=live",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#10141B",
+  "theme_color": "#10141B",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

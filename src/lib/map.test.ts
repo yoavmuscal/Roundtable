@@ -21,8 +21,8 @@ describe('hex map math', () => {
     expect(far.y).toBeLessThan(near.y);
   });
 
-  it('uses the same world origin as the backend', () => {
-    expect(hexWorldCenter({ q: 0, r: 0 }).x).toBeCloseTo(-0.8, 6);
-    expect(hexWorldCenter({ q: 0, r: 0 }).y).toBeCloseTo(-0.8, 6);
+  it('uses the same axial world origin as the backend', () => {
+    expect(hexWorldCenter({ q: 0, r: 0 }).x).toBeCloseTo(0, 8);
+    expect(hexWorldCenter({ q: 0, r: 0 }).y).toBeCloseTo(0, 8);
   });
 });

@@ -32,6 +32,7 @@ interface ReplayInfo {
 interface RoundtableState {
   phase: Phase;
   connected: boolean;
+  backgrounded: boolean;
   connectionMessage: string;
   clockOffset: number;
   people: Person[];
@@ -61,6 +62,7 @@ interface RoundtableState {
   tableSize: { width: number; height: number };
   applyMessage: (message: ServerMessage) => void;
   setConnected: (connected: boolean, message?: string) => void;
+  setBackgrounded: (backgrounded: boolean) => void;
   setClockOffset: (offset: number) => void;
   setPhase: (phase: Phase) => void;
   setPeopleNames: (people: Person[]) => void;
@@ -84,6 +86,7 @@ const defaultStatus: StatusPayload = {
 export const useRoundtableStore = create<RoundtableState>((set, get) => ({
   phase: 'setup',
   connected: false,
+  backgrounded: false,
   connectionMessage: 'Connecting to local backend…',
   clockOffset: 0,
   people: DEFAULT_PEOPLE,
@@ -135,7 +138,8 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
       case 'caption': {
         const people = state.people;
         const nameAlert =
-          message.caption.nameAlert || matchingPeople(message.caption.text, people).length > 0;
+          message.caption.kind === 'final' &&
+          (message.caption.nameAlert || matchingPeople(message.caption.text, people).length > 0);
         const caption = { ...message.caption, nameAlert };
         const captions = { ...state.captions, [caption.id]: caption };
         const latestByPerson = caption.personId
@@ -189,6 +193,9 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
       case 'refined':
         set({ refined: message.refined, phase: 'review', refineProgress: 1 });
         break;
+      case 'error':
+        set({ connectionMessage: message.message });
+        break;
       case 'tags': {
         const refined = state.refined;
         if (!refined) break;
@@ -213,6 +220,7 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
       connectionMessage: message ?? (connected ? 'Connected locally' : 'Disconnected'),
       status: { ...get().status, connected },
     }),
+  setBackgrounded: (backgrounded) => set({ backgrounded }),
   setClockOffset: (offset) => set({ clockOffset: offset }),
   setPhase: (phase) => set({ phase }),
   setPeopleNames: (people) => set({ people }),

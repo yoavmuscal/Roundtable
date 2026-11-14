@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { formatClock } from '../lib/map';
+import { CaptionText } from '../lib/nameText';
 import { ShapeGlyph } from '../lib/shape';
 import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
@@ -99,7 +100,7 @@ export function ReviewScreen() {
                   <span>{formatClock(turn.start)}</span>
                   <em>{Math.round(turn.confidence * 100)}%</em>
                 </div>
-                <p>{turn.text}</p>
+                <p><CaptionText text={turn.text} people={people} /></p>
                 <div className="tag-list">
                   {turn.tags.map((tag) => <span key={tag}>{tag}</span>)}
                 </div>

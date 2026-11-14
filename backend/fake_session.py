@@ -279,14 +279,14 @@ def refined_payload(people: list[Person]) -> dict[str, Any]:
             "topics": ["accessibility", "demo plan", "action items"],
             "summary": (
                 "The group agreed to lead the demo with the accessibility story: identifying the speaker, "
-                "showing name alerts, and keeping caption history available. Alex owns the checklist, Yoav "
+                "showing name alerts, and keeping caption history available. Lee owns the checklist, Yoav "
                 "validates the name alert and large-caption mode, and the team rehearses after the first full run."
             ),
             "actionItems": [
-                "Alex: finalize the accessibility checklist and caption colors.",
+                "Lee: finalize the accessibility checklist and caption colors.",
                 "Yoav: test the name alert and large-caption mode before dinner.",
                 "Team: rehearse the submission pitch after the first full run.",
-                "Alex: send action items after the refine pass.",
+                "Lee: send action items after the refine pass.",
             ],
             "turns": turns,
         },

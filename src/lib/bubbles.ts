@@ -23,17 +23,9 @@ const tailDirection: Record<AnchorMode, Point> = {
   top: { x: 0, y: -1 },
 };
 
-export function estimateBubbleSize(text: string, largeMode: boolean): Size {
-  const fontSize = largeMode ? 21 : 14;
-  const maxWidth = largeMode ? 330 : 232;
-  const charWidth = fontSize * (largeMode ? 0.54 : 0.53);
-  const naturalWidth = Math.min(maxWidth, Math.ceil(text.length * charWidth + 32));
-  const charsPerLine = Math.max(12, Math.floor((naturalWidth - 32) / charWidth));
-  const lines = Math.max(1, Math.min(2, Math.ceil(text.length / charsPerLine)));
-  return {
-    width: naturalWidth,
-    height: (largeMode ? 54 : 46) + (lines - 1) * (largeMode ? 25 : 20),
-  };
+export function estimateBubbleSize(_text: string, largeMode: boolean): Size {
+  // Fixed dimensions prevent the camera overlay from visually jumping as words arrive.
+  return largeMode ? { width: 330, height: 96 } : { width: 232, height: 66 };
 }
 
 function intersects(a: Box, b: Box): boolean {

@@ -3,39 +3,34 @@ import { CaptionHistory } from './CaptionHistory';
 import { OnDeviceCard } from './OnDeviceCard';
 import { QuestionsCard } from './QuestionsCard';
 import { RoomMap } from './RoomMap';
-import { SpeakerLanes } from './SpeakerLanes';
+import { SpeakerTimeline } from './SpeakerTimeline';
 import { TalkTimeRings } from './TalkTimeRings';
 import { VideoStage } from './VideoStage';
 import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
 
 export function LiveScreen() {
-  const replay = useRoundtableStore((state) => state.replay);
-  const level = useRoundtableStore((state) => state.level);
-  const connected = useRoundtableStore((state) => state.connected);
+  const frames = useRoundtableStore((state) => state.frames);
 
   return (
     <main className="live-screen" aria-label="Live conversation view">
       <div className="live-canvas">
         <VideoStage />
-        <SpeakerLanes />
+        <SpeakerTimeline />
         <RoomMap />
         <TalkTimeRings />
         <QuestionsCard />
         <OnDeviceCard />
       </div>
-      <div className="live-controls" aria-label="Session controls">
-        <div className="audio-meter" aria-label={`Audio level ${Math.round(level * 100)} percent`}>
-          <span style={{ width: `${Math.min(100, level * 180)}%` }} />
-        </div>
-        <span>{replay ? `Replaying ${replay.session} at ${replay.speed}×` : connected ? 'Local session ready' : 'Backend offline'}</span>
-        <button type="button" onClick={() => roundtableClient.control('start')} className="primary">
-          Start
+      {frames.length === 0 ? (
+        <button
+          type="button"
+          className="start-fab primary"
+          onClick={() => roundtableClient.control('start')}
+        >
+          Start replay
         </button>
-        <button type="button" onClick={() => roundtableClient.control('stop')}>
-          Stop + refine
-        </button>
-      </div>
+      ) : null}
       <CaptionHistory />
       <AnswerCard />
     </main>

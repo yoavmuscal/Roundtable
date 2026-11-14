@@ -1,55 +1,80 @@
-import { useMemo } from 'react';
-import type { Caption, Person } from '../contract';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Caption, Person, PersonFrame } from '../contract';
 import { layoutBubbles } from '../lib/bubbles';
-import { clamp } from '../lib/geometry';
+import { CaptionText } from '../lib/nameText';
 import { ShapeGlyph } from '../lib/shape';
+import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
+import { MediaPipeBrowserVision } from '../vision/MediaPipeVision';
+import { sendVisionObservations } from '../vision/visionBridge';
 
 const STAGE = { width: 752, height: 424 };
 
-function PersonSilhouette({ personId, people }: { personId: string; people: Person[] }) {
-  const frame = useRoundtableStore((state) => state.frames.find((item) => item.id === personId));
+function PersonSilhouette({
+  frame,
+  person,
+  minimal,
+}: {
+  frame: PersonFrame;
+  person?: Person;
+  minimal: boolean;
+}) {
   const activeSpeakerId = useRoundtableStore((state) => state.activeSpeakerId);
   const level = useRoundtableStore((state) => state.level);
-  if (!frame) return null;
-  const person = people.find((item) => item.id === personId);
   const color = person?.color ?? '#8B7CF6';
   const left = frame.faceBox.x * STAGE.width;
   const top = frame.faceBox.y * STAGE.height;
   const width = frame.faceBox.width * STAGE.width;
   const height = frame.faceBox.height * STAGE.height;
-  const active = activeSpeakerId === personId;
-  const torsoTop = top + height * 1.05;
-  const torsoHeight = frame.anchor.mode === 'head' ? 40 : 92;
+  const centerX = left + width / 2;
+  const active = activeSpeakerId === frame.id;
   const away = frame.state === 'away';
+  const bodyWidth = width * 1.68;
+  const bodyTop = top + height * 1.1;
 
   return (
     <div className={away ? 'person-layer away' : 'person-layer'}>
-      <div
-        className={active ? 'torso active' : 'torso'}
-        style={{
-          left: left - width * 0.35,
-          top: torsoTop,
-          width: width * 1.7,
-          height: torsoHeight,
-          borderColor: color,
-          background: `linear-gradient(180deg, ${color}42, ${color}16)`,
-          boxShadow: active ? `0 0 ${18 + level * 40}px ${color}66` : undefined,
-        }}
-      />
-      <div
-        className={active ? 'face-box active' : 'face-box'}
-        style={{ left, top, width, height, borderColor: color, boxShadow: active ? `0 0 ${16 + level * 42}px ${color}88` : undefined }}
-      >
-        <span className="eye" />
-        <span className="eye right" />
-        <span className="mouth" style={{ transform: `scaleY(${0.35 + clamp(frame.mouth, 0, 1)})` }} />
-      </div>
-      <div className="name-tag" style={{ left: left + width / 2, top: top + height + 8, borderColor: color }}>
+      <div className="person-label" style={{ left: centerX, top: top - 34, color }}>
         <ShapeGlyph shape={person?.shape ?? 'circle'} color={color} size={13} />
-        {person?.name ?? personId}
-        {frame.state === 'standing' ? <em>standing</em> : null}
+        <span>{person?.name ?? frame.id}</span>
       </div>
+      <div
+        className={active ? 'face-bracket active' : 'face-bracket'}
+        style={{ left: left - 7, top: top - 8, width: width + 14, height: height + 15, color }}
+      >
+        <i /><i /><i /><i />
+      </div>
+      {!minimal ? (
+        <>
+          <div
+            className={active ? 'head-circle active' : 'head-circle'}
+            style={{
+              left,
+              top,
+              width,
+              height,
+              boxShadow: active ? `0 0 ${18 + level * 30}px ${color}55` : undefined,
+            }}
+          />
+          <div
+            className={active ? 'body-shape active' : 'body-shape'}
+            style={{
+              left: centerX - bodyWidth / 2,
+              top: bodyTop,
+              width: bodyWidth,
+              height: Math.min(112, STAGE.height - bodyTop - 64),
+              borderColor: `${color}66`,
+            }}
+          />
+        </>
+      ) : null}
+      <div
+        className="chest-bracket"
+        style={{ left: left - 4, top: bodyTop + 2, width: width + 8, height: 34, color }}
+      >
+        <i /><i /><i /><i />
+      </div>
+      {frame.state === 'standing' ? <em className="standing-pill" style={{ left: centerX, top: bodyTop - 26 }}>standing</em> : null}
     </div>
   );
 }
@@ -61,9 +86,47 @@ export function VideoStage() {
   const latestByPerson = useRoundtableStore((state) => state.latestByPerson);
   const sessionTime = useRoundtableStore((state) => state.sessionTime);
   const largeCaptions = useRoundtableStore((state) => state.largeCaptions);
-  const stageAlert = useRoundtableStore((state) => state.stageAlert);
   const level = useRoundtableStore((state) => state.level);
   const activeSpeakerId = useRoundtableStore((state) => state.activeSpeakerId);
+  const replay = useRoundtableStore((state) => state.replay);
+  const status = useRoundtableStore((state) => state.status);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState<string>();
+
+  const replayVideoUrl = replay?.videoUrl;
+  const cameraRequested =
+    !replay &&
+    (new URLSearchParams(window.location.search).get('camera') === '1' || status.backend === 'live');
+
+  // Live mode: the browser owns the camera and runs MediaPipe face/pose tracking
+  // fully offline (local WASM + models), then streams observations to the backend.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!cameraRequested || replayVideoUrl || !video) return;
+    let cancelled = false;
+    const vision = new MediaPipeBrowserVision({
+      onObservations: (observations, atSeconds) => {
+        sendVisionObservations(observations, atSeconds, (message) => roundtableClient.send(message));
+      },
+      onError: (error) => {
+        if (!cancelled) setCameraError(error.message);
+      },
+    });
+    vision
+      .start(video)
+      .then(() => {
+        if (!cancelled) setCameraActive(true);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setCameraError(error instanceof Error ? error.message : 'Camera unavailable');
+      });
+    return () => {
+      cancelled = true;
+      vision.stop();
+      setCameraActive(false);
+    };
+  }, [cameraRequested, replayVideoUrl]);
 
   const latestCaptions = useMemo(() => {
     const byPerson = new Map<string, Caption>();
@@ -79,24 +142,47 @@ export function VideoStage() {
     [frames, latestCaptions, largeCaptions],
   );
   const offCameraSpeaking = level > 0.12 && !activeSpeakerId;
+  const mediaActive = Boolean(replayVideoUrl || cameraActive);
 
   return (
     <section
-      className={stageAlert ? 'video-stage name-alert' : 'video-stage'}
+      className={mediaActive ? 'video-stage media-present' : 'video-stage'}
       aria-label="Camera view with speaker-pinned captions"
     >
+      {replayVideoUrl ? <img className="camera-feed" src={replayVideoUrl} alt="Recorded session video" /> : null}
+      {cameraRequested && !replayVideoUrl ? (
+        <video
+          ref={videoRef}
+          className="camera-feed"
+          style={{ opacity: cameraActive ? 1 : 0 }}
+          autoPlay
+          muted
+          playsInline
+        />
+      ) : null}
       <div className="dot-grid" aria-hidden="true" />
-      {frames.length === 0 ? (
+      <div className="stage-horizon" aria-hidden="true" />
+      <div className="table-plane" aria-hidden="true" />
+      <div className="stage-pill"><span /> {cameraActive ? 'LIVE · iPhone cam' : 'LIVE · cam 1'}</div>
+      <div className="stage-note">Captions pinned to chest</div>
+      {frames.length === 0 && !mediaActive ? (
         <div className="stage-placeholder">
           <strong>Ready for the room</strong>
           <span>Start the replay or a live session to pin captions to speakers.</span>
         </div>
       ) : null}
-      {people.map((person) => (
-        <PersonSilhouette key={person.id} personId={person.id} people={people} />
+      {cameraError ? <div className="camera-error">{cameraError}; using tracker overlays only.</div> : null}
+      {frames.map((frame) => (
+        <PersonSilhouette
+          key={frame.id}
+          frame={frame}
+          person={people.find((item) => item.id === frame.id)}
+          minimal={mediaActive}
+        />
       ))}
       {bubbles.map((bubble) => {
         const person = people.find((item) => item.id === bubble.personId);
+        const isQuestion = bubble.text.includes('?');
         return (
           <article
             key={`${bubble.personId}-${bubble.turnId}`}
@@ -110,12 +196,13 @@ export function VideoStage() {
               left: bubble.x,
               top: bubble.y,
               width: bubble.width,
-              minHeight: bubble.height,
+              height: bubble.height,
               opacity: bubble.opacity,
               borderColor: person?.color,
             }}
           >
-            <span>{bubble.text}</span>
+            <span><CaptionText text={bubble.text} people={people} /></span>
+            {isQuestion ? <b className="question-badge">?</b> : null}
             <i className={`tail ${bubble.tail}`} style={{ borderColor: person?.color }} aria-hidden="true" />
           </article>
         );
@@ -125,7 +212,6 @@ export function VideoStage() {
           <span aria-hidden="true">●</span> Someone is speaking off-camera
         </div>
       ) : null}
-      {stageAlert ? <div className="alert-frame" role="status">Your name was mentioned</div> : null}
     </section>
   );
 }

@@ -12,10 +12,31 @@ export function axialToPixel(hex: AxialHex, size: number): Point {
   };
 }
 
+export function generateHexGrid(tableSize: Size, margin = 0.8, size = 0.1): AxialHex[] {
+  const cells: AxialHex[] = [];
+  const qMin = Math.floor((-margin - tableSize.height) / (Math.sqrt(3) * size)) - 2;
+  const qMax = Math.ceil((tableSize.width + margin + tableSize.height) / (Math.sqrt(3) * size)) + 2;
+  const rMin = Math.floor(-margin / (1.5 * size)) - 2;
+  const rMax = Math.ceil((tableSize.height + margin) / (1.5 * size)) + 2;
+  for (let r = rMin; r <= rMax; r += 1) {
+    for (let q = qMin; q <= qMax; q += 1) {
+      const center = hexWorldCenter({ q, r }, size);
+      const insideExtent =
+        center.x >= -margin &&
+        center.x <= tableSize.width + margin &&
+        center.y >= -margin &&
+        center.y <= tableSize.height + margin;
+      const underTable = center.x > 0 && center.x < tableSize.width && center.y > 0 && center.y < tableSize.height;
+      if (insideExtent && !underTable) cells.push({ q, r });
+    }
+  }
+  return cells;
+}
+
 export function hexWorldCenter(hex: AxialHex, size = 0.1): Point {
   return {
-    x: -0.8 + size * Math.sqrt(3) * (hex.q + hex.r / 2),
-    y: -0.8 + size * 1.5 * hex.r,
+    x: size * Math.sqrt(3) * (hex.q + hex.r / 2),
+    y: size * 1.5 * hex.r,
   };
 }
 

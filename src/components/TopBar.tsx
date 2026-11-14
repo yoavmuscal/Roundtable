@@ -2,70 +2,68 @@ import { formatClock } from '../lib/map';
 import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
 
-const phaseLabels = {
-  setup: 'Setup',
-  enroll: 'Enroll',
-  live: 'Live',
-  review: 'Review',
-} as const;
+function focusMeetingQuestion() {
+  useRoundtableStore.getState().setPhase('review');
+  window.setTimeout(() => document.getElementById('meeting-question')?.focus(), 0);
+}
 
 export function TopBar() {
   const phase = useRoundtableStore((state) => state.phase);
   const connected = useRoundtableStore((state) => state.connected);
-  const connectionMessage = useRoundtableStore((state) => state.connectionMessage);
+  const backgrounded = useRoundtableStore((state) => state.backgrounded);
   const sessionTime = useRoundtableStore((state) => state.sessionTime);
   const largeCaptions = useRoundtableStore((state) => state.largeCaptions);
   const historyOpen = useRoundtableStore((state) => state.historyOpen);
-  const setPhase = useRoundtableStore((state) => state.setPhase);
   const toggleLargeCaptions = useRoundtableStore((state) => state.toggleLargeCaptions);
   const toggleHistory = useRoundtableStore((state) => state.toggleHistory);
 
   return (
     <header className="top-bar">
       <div className="brand" aria-label="Roundtable">
-        <span className="brand-mark">RT</span>
-        <div>
-          <strong>Roundtable</strong>
-          <small>Live, offline, for everyone</small>
-        </div>
+        <strong>Roundtable</strong>
+        <small>Team sync · Sat, Nov 14</small>
       </div>
 
-      <nav className="phase-nav" aria-label="Screens">
-        {(Object.keys(phaseLabels) as Array<keyof typeof phaseLabels>).map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={item === phase ? 'active' : ''}
-            onClick={() => setPhase(item)}
-          >
-            {phaseLabels[item]}
-          </button>
-        ))}
-      </nav>
-
       <div className="top-actions">
-        <span className={connected ? 'connection connected' : 'connection'}>
-          <span aria-hidden="true" /> {connectionMessage}
-        </span>
-        <span className="session-clock" aria-label="Session time">
-          {formatClock(sessionTime)}
-        </span>
-        <button type="button" onClick={toggleHistory} aria-pressed={historyOpen} title="Caption history (H)">
-          History <kbd>H</kbd>
+        <button type="button" className="ask-pill" onClick={focusMeetingQuestion}>
+          <span className="ask-dot" aria-hidden="true" />
+          <span>Hold space to ask · ⌘K</span>
         </button>
-        <button type="button" onClick={toggleLargeCaptions} aria-pressed={largeCaptions} title="Large captions (L)">
-          Large <kbd>L</kbd>
-        </button>
+        <div className="utility-buttons" aria-label="Accessibility display controls">
+          <button
+            type="button"
+            className={historyOpen ? 'icon-button active' : 'icon-button'}
+            onClick={toggleHistory}
+            aria-pressed={historyOpen}
+            aria-label="Toggle caption history"
+            title="Caption history (H)"
+          >
+            ≡
+          </button>
+          <button
+            type="button"
+            className={largeCaptions ? 'icon-button active' : 'icon-button'}
+            onClick={toggleLargeCaptions}
+            aria-pressed={largeCaptions}
+            aria-label="Toggle large captions"
+            title="Large captions (L)"
+          >
+            Aa
+          </button>
+        </div>
+        <span
+          className={connected ? 'session-clock connected' : 'session-clock'}
+          title={backgrounded ? 'UI is backgrounded; the local backend keeps the session running' : 'Local backend connected'}
+        >
+          <span aria-hidden="true" /> {formatClock(sessionTime)}
+        </span>
         <button
           type="button"
-          className="primary"
-          onClick={() => {
-            useRoundtableStore.getState().resetSession();
-            roundtableClient.control('start');
-          }}
-          title="Replay recorded session (R)"
+          className="stop-button"
+          onClick={() => roundtableClient.control('stop')}
+          disabled={phase !== 'live' && sessionTime === 0}
         >
-          Replay <kbd>R</kbd>
+          Stop
         </button>
       </div>
     </header>
