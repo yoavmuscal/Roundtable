@@ -328,10 +328,12 @@ class SessionEngine:
     def stop(self, at_time: float | None = None) -> list[dict[str, Any]]:
         stop_time = self.clock() if at_time is None else at_time
         self.phase = "refine"
+        # flush_transcript() already records its own messages; only record the
+        # phase transition appended here to avoid duplicate recording.
         messages = self.flush_transcript(stop_time)
-        messages.append(self._message(stop_time, "phase", phase="refine"))
-        for message in messages:
-            self.recorder.record(message)
+        phase_message = self._message(stop_time, "phase", phase="refine")
+        self.recorder.record(phase_message)
+        messages.append(phase_message)
         self.recorder.write_turns("live_transcript.jsonl", self.turns)
         self.recorder.write_anchors()
         self.recorder.write_metadata(
