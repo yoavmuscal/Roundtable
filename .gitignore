@@ -7,11 +7,18 @@ __pycache__/
 # Node
 node_modules/
 dist/
+.vite/
 coverage/
+*.log
 
 # Local recordings and generated sessions
 sessions/*
 !sessions/.gitkeep
+
+# Env
+.env
+.env.*
+!.env.example
 
 # OS / editors
 .DS_Store

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import shlex
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .audio import MicrophoneLevelMonitor
 from .bonsai import BonsaiWorker, MockBonsaiClient, RealBonsaiClient
@@ -26,6 +28,16 @@ from .simulation import create_simulation_engine, run_simulation
 from .status import status_message
 from .transcribe import ArgmaxTranscriberAdapter
 from .ui_adapter import browser_to_internal, internal_to_ui
+
+
+DIST_DIR = Path(__file__).resolve().parents[2] / "dist"
+
+
+def mount_ui(app: FastAPI) -> FastAPI:
+    """Serve the production React build from the same localhost origin as the API."""
+    if DIST_DIR.is_dir():
+        app.mount("/", StaticFiles(directory=DIST_DIR, html=True), name="roundtable-ui")
+    return app
 
 
 class ConnectionManager:
@@ -65,7 +77,9 @@ def create_app(
     bonsai_url: str = "http://localhost:8080",
 ) -> FastAPI:
     if mode == "replay":
-        return create_replay_app(sim_session_dir)
+        if not (sim_session_dir / "events.jsonl").exists():
+            generate_session(sim_session_dir, include_video=True)
+        return mount_ui(create_replay_app(sim_session_dir))
 
     app = FastAPI(title="Roundtable Backend", version=str(CONTRACT_VERSION))
     app.add_middleware(
@@ -147,6 +161,7 @@ def create_app(
         await broadcast(SessionEngine._message(current.clock(), "phase", phase="review"))
 
     @app.get("/health")
+    @app.get("/api/health")
     async def health() -> dict[str, Any]:
         return {"ok": True, "mode": mode, "phase": engine().phase}
 
@@ -354,7 +369,7 @@ def create_app(
         elif action in {"ask_begin", "ask_end"}:
             await broadcast(SessionEngine._message(current.clock(), "status", action=action, **status_message(model="mock-bonsai" if mode == "sim" else "bonsai-2-2b", seconds_per_turn=None)))
 
-    return app
+    return mount_ui(app)
 
 
 def main() -> None:

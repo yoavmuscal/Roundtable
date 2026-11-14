@@ -8,6 +8,10 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "backend": "node scripts/python.mjs -m backend.app.server --mode sim",
+    "backend:live": "node scripts/python.mjs -m backend.app.server --mode live",
+    "backend:replay": "node scripts/python.mjs -m backend.app.server --mode replay",
+    "fake-session": "node scripts/python.mjs -m backend.app.fake_session --output sessions/fake",
+    "start": "npm run build && node scripts/python.mjs -m backend.app.server --mode sim",
     "test": "vitest run && node scripts/python.mjs -m pytest -q",
     "typecheck": "tsc --noEmit",
     "vision:check": "node scripts/python.mjs scripts/check_vision_assets.py"
