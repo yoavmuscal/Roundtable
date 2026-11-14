@@ -3,7 +3,8 @@ import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
 
 function focusMeetingQuestion() {
-  useRoundtableStore.getState().setPhase('review');
+  const state = useRoundtableStore.getState();
+  if (state.phase !== 'review') state.openAsk();
   window.setTimeout(() => document.getElementById('meeting-question')?.focus(), 0);
 }
 
@@ -30,7 +31,7 @@ export function TopBar() {
       <div className="top-actions">
         <button type="button" className="ask-pill" onClick={focusMeetingQuestion} title="Ask about the meeting (⌘K)">
           <span className="ask-dot" aria-hidden="true" />
-          <span>Hold space to ask · ⌘K</span>
+          <span>Ask · ⌘K</span>
         </button>
         <div className="utility-buttons" aria-label="Accessibility display controls">
           <button

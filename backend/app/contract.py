@@ -47,6 +47,7 @@ CONTROL_ACTIONS = frozenset(
         "ask-end",
         "recalibrate",
         "confirm-seats",
+        "demo-replay",
     }
 )
 PHASES = ("setup", "enroll", "live", "review")

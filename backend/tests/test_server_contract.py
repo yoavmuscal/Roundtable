@@ -123,3 +123,21 @@ def test_enrollment_follows_the_ui_people_list(tmp_path: Path) -> None:
     assert [person["id"] for person in engine.people] == ["p1", "p3", "p2", "p4"]
     assert engine.tracker.expected_people == 4
     assert "p1" in engine.enrollment_intervals
+
+
+def test_demo_replay_opens_the_refined_recording(tmp_path: Path) -> None:
+    client = TestClient(create_app(mode="sim", session_dir=tmp_path / "live", sim_session_dir=tmp_path / "fake"))
+    with client.websocket_connect("/ws") as socket:
+        socket.send_json({"type": "control", "action": "demo-replay"})
+        seen: dict[str, dict] = {}
+        for _ in range(6):
+            message = socket.receive_json()
+            seen[message["type"]] = message
+            if message["type"] == "status":
+                break
+    assert seen["replay"]["session"] == "Recorded this morning"
+    assert seen["phase"]["phase"] == "review"
+    assert seen["refined"]["refined"]["summary"]
+    assert seen["refined"]["refined"]["turns"]
+    assert client.app.state.engine.phase == "review"
+    assert client.app.state.engine.turns

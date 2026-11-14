@@ -23,6 +23,7 @@ from .contract import CONTRACT_VERSION, MessageValidationError, validate_browser
 from .export import export_session_ass, ffmpeg_export_command
 from .fake_session import FAKE_CORNERS, FAKE_TABLE, generate_session
 from .geometry import Point
+from .models import Turn
 from .refine import SpeakerKitAdapter, SpeakerSegment, match_clusters_to_people, refine_turns
 from .replay import create_app as create_replay_app
 from .session import SessionEngine
@@ -643,6 +644,55 @@ def create_app(
                 asyncio.create_task(check_enrollment_voices(current))
             else:
                 await broadcast(current.enroll_prompt(app.state.enroll_cursor))
+        elif action == "demo_replay":
+            # Failsafe: drop the live mic and show the prerecorded, already-refined session.
+            if app.state.sim_task and not app.state.sim_task.done():
+                app.state.sim_task.cancel()
+                app.state.sim_task = None
+            await stop_live_tasks(stop_audio=True)
+            task = app.state.transcriber_task
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+            app.state.transcriber_task = None
+            app.state.transcriber_state = "off"
+            if not (sim_session_dir / "events.jsonl").exists():
+                generate_session(sim_session_dir, include_video=False)
+            people_row: dict[str, Any] | None = None
+            refined_row: dict[str, Any] | None = None
+            for line in (sim_session_dir / "events.jsonl").read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if row.get("type") == "people":
+                    people_row = row
+                elif row.get("type") == "refined":
+                    refined_row = row
+            current.phase = "review"
+            if people_row and isinstance(people_row.get("people"), list):
+                current.set_enrolled_people(people_row["people"])
+            if refined_row:
+                current.turns = [
+                    Turn(
+                        str(item.get("id")),
+                        item.get("speakerId"),
+                        str(item.get("text", "")),
+                        float(item.get("start", 0.0)),
+                        float(item.get("end", 0.0)),
+                        float(item.get("confidence", 0.0)),
+                        tags=list(item.get("tags") or []),
+                    )
+                    for item in refined_row.get("turns", [])
+                    if isinstance(item, dict)
+                ]
+            await broadcast(SessionEngine._message(0.0, "replay", session="Recorded this morning", speed=1))
+            if people_row:
+                await broadcast(people_row)
+            await broadcast(SessionEngine._message(0.0, "phase", phase="review"))
+            if refined_row:
+                await broadcast(refined_row)
+            await broadcast(SessionEngine._message(0.0, "status", **current_status()))
         elif action == "recalibrate":
             current.phase = "setup"
             await broadcast(SessionEngine._message(current.clock(), "phase", phase="setup"))

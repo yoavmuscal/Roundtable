@@ -60,6 +60,7 @@ interface RoundtableState {
   stageAlert: boolean;
   sessionTime: number;
   tableSize: { width: number; height: number };
+  askOpen: boolean;
   applyMessage: (message: ServerMessage) => void;
   setConnected: (connected: boolean, message?: string) => void;
   setBackgrounded: (backgrounded: boolean) => void;
@@ -70,6 +71,8 @@ interface RoundtableState {
   toggleHistory: () => void;
   clearAnswer: () => void;
   resetSession: () => void;
+  openAsk: () => void;
+  closeAsk: () => void;
 }
 
 const savedLargeCaptions = globalThis.localStorage?.getItem('roundtable.largeCaptions') === 'true';
@@ -108,6 +111,7 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
   stageAlert: false,
   sessionTime: 0,
   tableSize: DEFAULT_TABLE_SIZE,
+  askOpen: false,
 
   applyMessage: (message) => {
     const state = get();
@@ -232,6 +236,8 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
   },
   toggleHistory: () => set({ historyOpen: !get().historyOpen }),
   clearAnswer: () => set({ answer: undefined }),
+  openAsk: () => set({ askOpen: true }),
+  closeAsk: () => set({ askOpen: false }),
   resetSession: () =>
     set({
       phase: 'setup',
@@ -253,5 +259,6 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
       enrollPrompt: undefined,
       sessionTime: 0,
       level: 0,
+      askOpen: false,
     }),
 }));

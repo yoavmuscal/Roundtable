@@ -169,7 +169,8 @@ export type ClientMessage =
         | 'ask-begin'
         | 'ask-end'
         | 'recalibrate'
-        | 'confirm-seats';
+        | 'confirm-seats'
+        | 'demo-replay';
       value?: string;
     }
   | { type: 'ask'; text: string }

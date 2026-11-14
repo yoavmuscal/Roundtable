@@ -1,4 +1,4 @@
-import { useLayoutEffect } from 'react';
+import { FormEvent, useLayoutEffect, useState } from 'react';
 import { AnswerCard } from './AnswerCard';
 import { CaptionHistory } from './CaptionHistory';
 import { LiveTranscript } from './LiveTranscript';
@@ -8,6 +8,40 @@ import { RoomMap } from './RoomMap';
 import { SpeakerTimeline } from './SpeakerTimeline';
 import { TalkTimeRings } from './TalkTimeRings';
 import { VideoStage } from './VideoStage';
+import { roundtableClient } from '../services/roundtableClient';
+import { useRoundtableStore } from '../state/store';
+
+function LiveAsk() {
+  const askOpen = useRoundtableStore((state) => state.askOpen);
+  const closeAsk = useRoundtableStore((state) => state.closeAsk);
+  const [question, setQuestion] = useState('');
+  if (!askOpen) return null;
+
+  const ask = (event: FormEvent) => {
+    event.preventDefault();
+    const text = question.trim();
+    if (!text) return;
+    roundtableClient.ask(text);
+    setQuestion('');
+  };
+
+  return (
+    <form className="live-ask" onSubmit={ask}>
+      <label htmlFor="meeting-question">Ask about this meeting</label>
+      <div>
+        <input
+          id="meeting-question"
+          value={question}
+          autoFocus
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="What was just decided?"
+        />
+        <button type="submit" className="primary">Ask</button>
+        <button type="button" onClick={closeAsk} aria-label="Close ask">×</button>
+      </div>
+    </form>
+  );
+}
 
 const CANVAS = { width: 1200, height: 680 };
 const TOP_BAR = 64;
@@ -48,6 +82,7 @@ export function LiveScreen() {
         </div>
       </div>
       <CaptionHistory />
+      <LiveAsk />
       <AnswerCard />
     </main>
   );

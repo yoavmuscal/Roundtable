@@ -16,6 +16,7 @@ export function ReviewScreen() {
   const people = useRoundtableStore((state) => state.people);
   const answer = useRoundtableStore((state) => state.answer);
   const history = useRoundtableStore((state) => state.history);
+  const replay = useRoundtableStore((state) => state.replay);
   const [question, setQuestion] = useState('');
 
   const ask = (event: FormEvent) => {
@@ -54,6 +55,7 @@ export function ReviewScreen() {
           </button>
         </div>
         <h1>Review the meeting without replaying the whole room.</h1>
+        {replay ? <div className="recording-banner" role="status">This is a recording from this morning.</div> : null}
         {refined ? (
           <>
             <div className="correction-badge">

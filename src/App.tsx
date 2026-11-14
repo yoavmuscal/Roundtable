@@ -13,7 +13,8 @@ import { roundtableClient } from './services/roundtableClient';
 import { useRoundtableStore } from './state/store';
 
 function focusMeetingQuestion() {
-  useRoundtableStore.getState().setPhase('review');
+  const state = useRoundtableStore.getState();
+  if (state.phase !== 'review') state.openAsk();
   window.setTimeout(() => document.getElementById('meeting-question')?.focus(), 0);
 }
 
@@ -40,7 +41,6 @@ export default function App() {
       }
     });
 
-    let spaceAskActive = false;
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
@@ -49,34 +49,25 @@ export default function App() {
         focusMeetingQuestion();
         return;
       }
-      if (event.code === 'Space' && useRoundtableStore.getState().phase === 'live') {
-        event.preventDefault();
-        if (!spaceAskActive && !event.repeat) {
-          spaceAskActive = true;
-          roundtableClient.control('ask-begin');
-        }
-        return;
-      }
       if (event.key.toLowerCase() === 'l') useRoundtableStore.getState().toggleLargeCaptions();
       if (event.key.toLowerCase() === 'h') useRoundtableStore.getState().toggleHistory();
-      if (event.key.toLowerCase() === 'r' && useRoundtableStore.getState().status.backend !== 'live') {
-        // R replays the recorded session. In live mode a session starts only from Enroll.
-        useRoundtableStore.getState().resetSession();
-        useRoundtableStore.getState().setPhase('live');
-        roundtableClient.control('start');
-      }
-    };
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (event.code === 'Space' && spaceAskActive) {
-        spaceAskActive = false;
-        roundtableClient.control('ask-end');
+      if (event.key.toLowerCase() === 'r' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const backend = useRoundtableStore.getState().status.backend;
+        if (backend === 'live') {
+          useRoundtableStore.getState().resetSession();
+          useRoundtableStore.getState().setPhase('review');
+          roundtableClient.control('demo-replay');
+        } else {
+          // Sim/replay: play the recorded session on the live canvas.
+          useRoundtableStore.getState().resetSession();
+          useRoundtableStore.getState().setPhase('live');
+          roundtableClient.control('start');
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
       unsubscribeAutoplay();
       stopBackgroundCompatibility();
       roundtableClient.disconnect();
