@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MAX_PEOPLE, MIN_PEOPLE, addPerson, removePerson } from '../lib/people';
 import { ShapeGlyph } from '../lib/shape';
 import { roundtableClient } from '../services/roundtableClient';
@@ -10,11 +10,32 @@ export function EnrollScreen() {
   const enrollPrompt = useRoundtableStore((state) => state.enrollPrompt);
   const level = useRoundtableStore((state) => state.level);
   const status = useRoundtableStore((state) => state.status);
+  const sessionTime = useRoundtableStore((state) => state.sessionTime);
+  const listening = status.transcriberState === 'listening';
+  const live = status.backend === 'live';
+  // Seconds of voice heard for each person during their prompt (from live mic levels).
+  const [voiced, setVoiced] = useState<Record<string, number>>({});
+  const [promptStartedAt, setPromptStartedAt] = useState(0);
+  const lastLevelAt = useRef<number | undefined>(undefined);
+  const currentId = enrollPrompt?.personId;
+  useEffect(() => {
+    setPromptStartedAt(useRoundtableStore.getState().sessionTime);
+    lastLevelAt.current = undefined;
+  }, [currentId]);
+  useEffect(() => {
+    if (!currentId) return;
+    const previous = lastLevelAt.current;
+    lastLevelAt.current = sessionTime;
+    if (previous === undefined || level < 0.02) return;
+    const step = Math.min(0.2, Math.max(0, sessionTime - previous));
+    setVoiced((current) => ({ ...current, [currentId]: (current[currentId] ?? 0) + step }));
+  }, [level, sessionTime, currentId]);
   const heard = useRoundtableStore((state) => {
-    const latest = Object.values(state.captions).sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
+    const latest = Object.values(state.captions)
+      .filter((caption) => (caption.end ?? caption.start) >= promptStartedAt)
+      .sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
     return latest?.text;
   });
-  const listening = status.transcriberState === 'listening';
   const setPhase = useRoundtableStore((state) => state.setPhase);
   const [aliases, setAliases] = useState<Record<string, string>>({});
 
@@ -63,7 +84,7 @@ export function EnrollScreen() {
             </span>
             <strong>{enrollPrompt.prompt}</strong>
             <em className="enroll-heard">
-              {status.backend !== 'live'
+              {!live
                 ? 'Replay mode: voice enrollment runs only in live mode.'
                 : !listening
                   ? 'Argmax is loading Whisper (about 20 s)…'
@@ -71,6 +92,11 @@ export function EnrollScreen() {
                     ? `Heard: “${heard}”`
                     : 'Listening… speak now.'}
             </em>
+            {live && currentId ? (
+              <em className="enroll-captured">
+                Voice captured: {(voiced[currentId] ?? 0).toFixed(1)} s {(voiced[currentId] ?? 0) >= 2 ? '✓ enough, press Next speaker' : '(aim for 2 s)'}
+              </em>
+            ) : null}
           </div>
         ) : null}
         <div className="button-row">
@@ -88,7 +114,15 @@ export function EnrollScreen() {
           <button type="button" onClick={() => roundtableClient.control('enroll-redo', JSON.stringify(withAliases()))}>Redo sample</button>
           <button type="button" onClick={() => roundtableClient.control('enroll-skip', JSON.stringify(withAliases()))}>Skip</button>
           <button type="button" onClick={() => roundtableClient.control('enroll-next', JSON.stringify(withAliases()))}>Next speaker</button>
-          <button type="button" className="primary" onClick={start}>Start live session</button>
+          <button
+            type="button"
+            className="primary"
+            onClick={start}
+            disabled={live && !listening}
+            title={live && !listening ? 'Waiting for Argmax to finish loading Whisper' : undefined}
+          >
+            {live && !listening ? 'Waiting for Argmax…' : 'Start live session'}
+          </button>
         </div>
       </section>
       <section className="enroll-cards" aria-label="Speaker enrollment">
@@ -125,6 +159,7 @@ export function EnrollScreen() {
                 placeholder="e.g. Yoyo"
               />
             </label>
+            {live && (voiced[person.id] ?? 0) >= 2 ? <p className="voice-done">✓ Voice sample captured</p> : null}
             <div className="voice-meter" aria-label={`Live microphone level for ${person.name}`}>
               <span
                 style={{

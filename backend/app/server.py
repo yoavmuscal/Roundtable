@@ -197,9 +197,12 @@ def create_app(
         app.state.transcriber_state = "loading"
         await broadcast(SessionEngine._message(engine().clock(), "status", **current_status()))
         try:
+            logged = 0
             async for _, chunk in adapter.stream():
-                raw_log.write(chunk)
-                raw_log.flush()
+                if logged < 2_000_000:  # argmax-cli reprints its whole history; keep a sample only
+                    raw_log.write(chunk)
+                    raw_log.flush()
+                    logged += len(chunk)
                 if app.state.transcriber_state != "listening" and (b"Transcribing audio stream" in chunk or b"---" in chunk):
                     # Whisper finished loading (about 20 s): tell the UI it is safe to talk.
                     app.state.transcriber_state = "listening"
@@ -223,7 +226,7 @@ def create_app(
 
     async def refine_after_stop() -> None:
         current = engine()
-        await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="diarize", progress=0.2))
+        await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="separating voices with Argmax SpeakerKit", progress=0.2))
         refined_turns = current.turns
         changed_count = 0
         cluster_mapping: dict[str, str] = {}
@@ -246,9 +249,11 @@ def create_app(
                 changed_count = result.changed_count
             except Exception as exc:
                 await broadcast(SessionEngine._message(current.clock(), "error", code="refine", message=str(exc)))
-        await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="tags", progress=0.55))
-        refined_turns = await current.tag_turns(refined_turns)
-        await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="summary", progress=0.7))
+        await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="tagging questions and decisions", progress=0.55))
+        # Bonsai tags at most the 25 longest turns so Review opens in seconds, not minutes.
+        to_tag = sorted(refined_turns, key=lambda turn: len(turn.text), reverse=True)[:25]
+        await current.tag_turns(to_tag)
+        await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="writing the summary", progress=0.75))
         try:
             summary = await current.summarize()
         except Exception as exc:

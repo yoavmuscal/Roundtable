@@ -63,8 +63,17 @@ export function TopBar() {
         <button
           type="button"
           className="stop-button"
-          onClick={() => roundtableClient.control('stop')}
-          disabled={phase !== 'live' && sessionTime === 0}
+          onClick={() => {
+            roundtableClient.control('stop');
+            // Refine takes a while (SpeakerKit + Bonsai); leave Live now and show its progress.
+            useRoundtableStore.setState({
+              phase: 'review',
+              refined: undefined,
+              refineProgress: 0.05,
+              refineMessage: 'Stopping and saving the recording…',
+            });
+          }}
+          disabled={phase !== 'live'}
         >
           Stop
         </button>

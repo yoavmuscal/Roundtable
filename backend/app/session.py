@@ -292,12 +292,7 @@ class SessionEngine:
     def _commits_to_messages(self, commits: list[Any], time_s: float, speaker_hint: str | None) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
         for commit in commits:
-            start = self.turn_builder.current_start if self.turn_builder.current_start is not None else max(0.0, time_s - 0.2)
-            attribution = self.fusion.attribute(start, time_s)
-            speaker = speaker_hint or attribution.speaker_id
-            completed = self.turn_builder.add_words(commit.words, time_s, speaker, attribution.confidence)
-            if completed is not None:
-                messages.extend(self._finalize_turn(completed))
+            messages.extend(self._add_commit(commit, time_s, speaker_hint))
             if self.turn_builder.current_words:
                 current_id = turn_id(self.turn_builder.sequence + 1)
                 messages.append(
@@ -350,17 +345,28 @@ class SessionEngine:
             self.recorder.record(message)
         return messages
 
+    def _add_commit(self, commit: Any, fallback_time: float, speaker_hint: str | None) -> list[dict[str, Any]]:
+        """Attribute committed words by who was moving their mouth while they were spoken."""
+        spoken_end = commit.spoken_end if getattr(commit, "spoken_end", None) is not None else fallback_time
+        spoken_start = commit.spoken_start if getattr(commit, "spoken_start", None) is not None else None
+        if spoken_start is None:
+            spoken_start = self.turn_builder.current_start if self.turn_builder.current_start is not None else max(0.0, spoken_end - 0.2)
+        # Argmax confirms words seconds after they are said; looking at mouths at confirmation
+        # time put every caption on whoever happened to be talking then.
+        attribution = self.fusion.attribute(spoken_start, max(spoken_end, spoken_start + 0.3))
+        speaker = speaker_hint or attribution.speaker_id
+        completed = self.turn_builder.add_words(commit.words, spoken_end, speaker, attribution.confidence)
+        if self.turn_builder.current_start is not None and len(self.turn_builder.current_words) == len(commit.words):
+            self.turn_builder.current_start = min(self.turn_builder.current_start, spoken_start)
+        return self._finalize_turn(completed) if completed is not None else []
+
     def tick(self, time_s: float) -> list[dict[str, Any]]:
         """Live-mode heartbeat: flush partial words after silence and close quiet turns."""
         messages: list[dict[str, Any]] = []
         commit_time = self.transcript.last_update if self.transcript.last_update is not None else time_s
         commit = self.transcript.flush_due(time_s)
         if commit:
-            start = self.turn_builder.current_start if self.turn_builder.current_start is not None else commit_time
-            attribution = self.fusion.attribute(start, commit_time)
-            completed = self.turn_builder.add_words(commit.words, commit_time, attribution.speaker_id, attribution.confidence)
-            if completed:
-                messages.extend(self._finalize_turn(completed))
+            messages.extend(self._add_commit(commit, commit_time, None))
         last_word = self.turn_builder.last_word_time
         if last_word is not None and time_s - last_word > self.turn_builder.gap_s and not self.transcript.partial_words:
             completed = self.turn_builder.end_turn(last_word)
@@ -387,7 +393,7 @@ class SessionEngine:
             return self._message(self.clock(), "answer", question=text, text="Bonsai is unavailable; showing the most recent relevant turns.", citedTurnIds=cited)
         result = await self.bonsai.submit(
             "ask",
-            {"question": text, "turns": [turn.as_dict() for turn in self.turns], "names": self._names()},
+            {"question": text, "turns": [_brief(turn) for turn in self.turns[-80:]], "names": self._names()},
             ANSWER_SCHEMA,
             timeout_s,
         )
@@ -407,7 +413,8 @@ class SessionEngine:
                     TAG_SCHEMA,
                     timeout_s,
                 )
-                turn.tags = [str(tag) for tag in result.get("tags", [])]
+                # Keep the code-detected question/answer tags and add Bonsai's.
+                turn.tags = list(dict.fromkeys([*turn.tags, *(str(tag) for tag in result.get("tags", []))]))
             except Exception:
                 # Refine remains useful when an individual tag job times out.
                 pass
@@ -421,7 +428,7 @@ class SessionEngine:
             return {"summary": "Bonsai unavailable.", "topics": [], "actionItems": [], "perPerson": []}
         return await self.bonsai.submit(
             "summary",
-            {"turns": [turn.as_dict() for turn in self.turns], "names": self._names()},
+            {"turns": [_brief(turn) for turn in self.turns[-60:]], "names": self._names()},
             SUMMARY_SCHEMA,
             timeout_s,
         )
@@ -494,3 +501,9 @@ class SessionEngine:
     @staticmethod
     def _message(time_s: float, message_type: str, **payload: Any) -> dict[str, Any]:
         return {"type": message_type, "version": CONTRACT_VERSION, "time": round(time_s, 3), **payload}
+
+
+def _brief(turn: Turn) -> dict[str, Any]:
+    """What Bonsai needs per turn; prefill on the 8 GB Mac runs ~170 tokens/s, so keep it short."""
+    text = turn.text if len(turn.text) <= 280 else turn.text[:277] + "..."
+    return {"id": turn.id, "speakerId": turn.speaker_id, "text": text}

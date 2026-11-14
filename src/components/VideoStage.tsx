@@ -92,7 +92,6 @@ export function VideoStage() {
   const largeCaptions = useRoundtableStore((state) => state.largeCaptions);
   const level = useRoundtableStore((state) => state.level);
   const activeSpeakerId = useRoundtableStore((state) => state.activeSpeakerId);
-  const stageAlert = useRoundtableStore((state) => state.stageAlert);
   const replay = useRoundtableStore((state) => state.replay);
   const status = useRoundtableStore((state) => state.status);
   const connected = useRoundtableStore((state) => state.connected);
@@ -177,7 +176,7 @@ export function VideoStage() {
   }, [captions, frames, sessionTime]);
   const offCameraSpeaking = level > 0.12 && !activeSpeakerId;
   const mediaActive = Boolean(replayVideoUrl || cameraActive);
-  const stageClass = ['video-stage', mediaActive ? 'media-present' : '', stageAlert ? 'alert' : ''].join(' ').trim();
+  const stageClass = ['video-stage', mediaActive ? 'media-present' : ''].join(' ').trim();
 
   return (
     <section className={stageClass} aria-label="Camera view with speaker-pinned captions">
@@ -213,7 +212,7 @@ export function VideoStage() {
           <button
             type="button"
             className="primary"
-            disabled={!connected}
+            disabled={!connected || (status.backend === 'live' && status.transcriberState !== 'listening')}
             onClick={() => {
               useRoundtableStore.getState().resetSession();
               useRoundtableStore.getState().setPhase('live');

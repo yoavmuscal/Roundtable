@@ -31,6 +31,9 @@ class TranscriptCommit:
     words: tuple[str, ...]
     time: float
     explicit: bool = False
+    # When the words were actually spoken (Argmax confirms a few seconds later).
+    spoken_start: float | None = None
+    spoken_end: float | None = None
 
 
 class StreamingTranscriptParser:
@@ -47,6 +50,10 @@ class StreamingTranscriptParser:
         # When Argmax keeps running across sessions it reprints everything it already
         # confirmed; the first block after a reset only sets the baseline.
         self.baseline_pending = False
+        self._segments_seen = 0  # confirmed segments already consumed (Argmax reprints all of them)
+        self._flushed: list[str] = []  # words committed by the silence flush, not yet confirmed
+        self._speech_start: float | None = None
+        self._speech_last: float | None = None
 
     def feed_chunk(self, chunk: bytes | str, time_s: float) -> list[TranscriptCommit]:
         text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
@@ -74,14 +81,18 @@ class StreamingTranscriptParser:
             complete.append(tail)
             tail = ""
         self._buffer = tail
-        commits: list[TranscriptCommit] = []
-        for block in complete:
-            commits.extend(self.feed_block(block, time_s))
-        return commits
+        # Every block repeats the full confirmed history, so only the newest one matters.
+        labelled = [block for block in complete if "segment:" in block or "Current text:" in block]
+        return self.feed_block(labelled[-1], time_s) if labelled else []
 
     def feed_block(self, block: str, time_s: float) -> list[TranscriptCommit]:
-        """Parse one argmax-cli stream block; confirmed segments commit immediately."""
-        confirmed: list[str] = []
+        """Parse one argmax-cli stream block; confirmed segments commit immediately.
+
+        argmax-cli reprints every confirmed segment since it started, so new text is read
+        by segment count rather than re-aligned (re-alignment re-added the whole history
+        whenever a flushed hypothesis differed from what Argmax later confirmed).
+        """
+        confirmed_raw: list[str] = []
         unconfirmed: list[str] = []
         current = ""
         seen = False
@@ -91,37 +102,50 @@ class StreamingTranscriptParser:
                 continue
             seen = True
             label, value = match.groups()
-            text = clean_whisper_text(value)
             if label == "Confirmed segment":
-                confirmed.append(text)
+                confirmed_raw.append(value)  # cleaned lazily: only new segments matter
             elif label == "Unconfirmed segment":
-                unconfirmed.append(text)
+                unconfirmed.append(clean_whisper_text(value))
             else:
-                current = text
+                current = clean_whisper_text(value)
         if not seen:
             return []
-        confirmed_words = tuple(" ".join(confirmed).split())
-        pending = " ".join(unconfirmed) if any(unconfirmed) else current
-        commits: list[TranscriptCommit] = []
         if self.baseline_pending:
+            # Text confirmed before this session (e.g. during enrollment) is not replayed.
             self.baseline_pending = False
-            self.committed_words = list(confirmed_words)
-            self._baseline = len(confirmed_words)
-        total_confirmed = self._align_reprint(confirmed_words) if confirmed_words else tuple(self.committed_words)
-        new_words = tuple(total_confirmed[len(self.committed_words):])
+            self._segments_seen = len(confirmed_raw)
+        if len(confirmed_raw) < self._segments_seen:
+            self._segments_seen = len(confirmed_raw)  # the CLI restarted or trimmed its window
+        new_segments = [clean_whisper_text(value) for value in confirmed_raw[self._segments_seen:]]
+        self._segments_seen = len(confirmed_raw)
+        new_words = tuple(" ".join(new_segments).split())
+        if new_words and self._flushed:
+            # Skip what the silence flush already showed, if Argmax confirmed it the same way.
+            matched = 0
+            for flushed, confirmed in zip(self._flushed, new_words):
+                if _norm(flushed) != _norm(confirmed):
+                    break
+                matched += 1
+            new_words = new_words[matched:]
+            self._flushed = []
+        commits: list[TranscriptCommit] = []
+        pending = " ".join(item for item in unconfirmed if item) or current
+        partial = tuple(pending.split())
         if new_words:
             self.committed_words.extend(new_words)
-            commits.append(TranscriptCommit(new_words, time_s, explicit=True))
-        partial = tuple(pending.split())
-        # Drop words of the hypothesis that the confirmed text already covers.
-        overlap = min(len(partial), len(self.committed_words))
-        while overlap and tuple(self.committed_words[-overlap:]) != partial[:overlap]:
-            overlap -= 1
-        partial = partial[overlap:]
+            spoken_start = self._speech_start if self._speech_start is not None else time_s
+            spoken_end = self._speech_last if self._speech_last is not None else time_s
+            commits.append(TranscriptCommit(new_words, time_s, True, spoken_start, max(spoken_start, spoken_end)))
+            # Anything still unconfirmed was said after the words just confirmed.
+            self._speech_start = spoken_end if partial else None
         if partial != self.partial_words or new_words:
             # Only real changes count as activity, so repeated identical blocks during
-            # silence let the 0.8 s flush fire.
+            # silence let the fallback flush fire.
             self.last_update = time_s
+            if partial:
+                if self._speech_start is None:
+                    self._speech_start = time_s
+                self._speech_last = time_s
         self.partial_words = partial
         self.previous_words = tuple(self.committed_words) + partial
         return commits
@@ -161,7 +185,12 @@ class StreamingTranscriptParser:
         self.partial_words = ()
         self.previous_words = tuple(self.committed_words)
         self.last_update = now_s
-        return TranscriptCommit(words, now_s, explicit=True)
+        spoken_start, spoken_end = self._speech_start, self._speech_last
+        if self.block_mode:
+            self._flushed.extend(words)
+            self._speech_start = None
+            self._speech_last = None
+        return TranscriptCommit(words, now_s, True, spoken_start, spoken_end)
 
     def _align_reprint(self, words: tuple[str, ...]) -> tuple[str, ...]:
         committed = tuple(self.committed_words)
@@ -294,6 +323,10 @@ def _clean_line(line: str) -> str:
     if clean in {"[", "]", "{", "}"}:
         return ""
     return clean
+
+
+def _norm(word: str) -> str:
+    return re.sub(r"[^\w']", "", word).lower()
 
 
 def _common_prefix_count(a: tuple[str, ...], b: tuple[str, ...]) -> int:
