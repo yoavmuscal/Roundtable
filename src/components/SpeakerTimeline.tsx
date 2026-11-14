@@ -9,19 +9,30 @@ const DOT_EVERY_SECONDS = 1.5;
 export function SpeakerTimeline() {
   const people = useRoundtableStore((state) => state.people);
   const history = useRoundtableStore((state) => state.history);
+  const captions = useRoundtableStore((state) => state.captions);
+  const activeSpeakerId = useRoundtableStore((state) => state.activeSpeakerId);
   const sessionTime = useRoundtableStore((state) => state.sessionTime);
 
   const byPerson = useMemo(() => {
     const grouped = new Map<string, number[]>();
-    history.forEach((caption) => {
+    const finalIds = new Set(history.map((item) => item.turnId));
+    const partials = Object.values(captions).filter(
+      (item) => item.kind === 'partial' && !finalIds.has(item.turnId),
+    );
+    [...history, ...partials].forEach((caption) => {
       if (!caption.personId) return;
       const times = grouped.get(caption.personId) ?? [];
       const end = caption.end ?? caption.start;
       for (let t = caption.start; t <= end + 1e-6; t += DOT_EVERY_SECONDS) times.push(t);
       grouped.set(caption.personId, times);
     });
+    if (activeSpeakerId && sessionTime > 0) {
+      const times = grouped.get(activeSpeakerId) ?? [];
+      times.push(sessionTime);
+      grouped.set(activeSpeakerId, times);
+    }
     return grouped;
-  }, [history]);
+  }, [history, captions, activeSpeakerId, sessionTime]);
 
   // The window slides once the session is longer than 90 s so "now" stays in view.
   const windowStart = Math.max(0, sessionTime - WINDOW_SECONDS);

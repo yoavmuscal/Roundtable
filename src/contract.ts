@@ -122,6 +122,8 @@ export interface StatusPayload {
   transcriberState?: 'off' | 'loading' | 'listening';
   /** SpeakerKit put two people's enrollment clips in the same voice group. */
   voiceWarning?: string;
+  /** Result of running SpeakerKit across the enrolled voice clips. */
+  voiceCheck?: 'idle' | 'checking' | 'ok' | 'warn';
 }
 
 export interface RefinedPayload {

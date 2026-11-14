@@ -69,7 +69,8 @@ export function EnrollScreen() {
     return lines.join(' ');
   });
   const sentences = enrollPrompt ? promptSentences(enrollPrompt.prompt) : [];
-  const spokeEnough = Boolean(currentId && (voiced[currentId] ?? 0) >= 1.2);
+  const isLastSpeaker = Boolean(enrollPrompt && enrollPrompt.index + 1 >= enrollPrompt.total);
+  const spokeEnough = Boolean(currentId && (voiced[currentId] ?? 0) >= 0.8);
   const heardFlags = enrollPrompt && recording && spokeEnough ? sentencesHeard(enrollPrompt.prompt, heard) : sentences.map(() => false);
   const currentHeard = Boolean(recording && spokeEnough && enrollPrompt && currentId && sentenceHeard(enrollPrompt.prompt, heard));
   // People whose enrollment sentences Argmax recognised (kept after moving to the next person).
@@ -126,8 +127,8 @@ export function EnrollScreen() {
         <p className="eyebrow">Step 2 · Enroll speakers</p>
         <h1>Names power the alert a Deaf user should never miss.</h1>
         <p>
-          Add each person's name and optional aliases. Each person reads two sentences
-          (about five seconds) so the final refine pass can match voices to seats.
+          Add each person's name and optional aliases. Each person reads two short sentences
+          (about three seconds) so SpeakerKit can verify and match voices to seats.
         </p>
         {enrollPrompt ? (
           <div className={currentHeard ? 'enroll-prompt heard' : 'enroll-prompt'} role="status">
@@ -159,7 +160,19 @@ export function EnrollScreen() {
                 <span aria-hidden="true">✓</span>
                 <div>
                   <strong>Both sentences heard</strong>
-                  <small>Argmax recognised them. Press Next speaker.</small>
+                  <small>{isLastSpeaker ? 'Argmax recognised them. Press Verify voices.' : 'Argmax recognised them. Press Next speaker.'}</small>
+                </div>
+              </div>
+            ) : null}
+            {status.voiceCheck === 'checking' ? (
+              <div className="voice-checking" role="status">Checking voices with Argmax SpeakerKit…</div>
+            ) : null}
+            {status.voiceCheck === 'ok' && !status.voiceWarning ? (
+              <div className="sentence-heard" role="status">
+                <span aria-hidden="true">✓</span>
+                <div>
+                  <strong>Voices verified</strong>
+                  <small>SpeakerKit separated all enrolled voices cleanly. Ready to start!</small>
                 </div>
               </div>
             ) : null}
@@ -168,7 +181,7 @@ export function EnrollScreen() {
             ) : null}
             {live && currentId && recording ? (
               <em className="enroll-captured">
-                Voice captured: {(voiced[currentId] ?? 0).toFixed(1)} s {(voiced[currentId] ?? 0) >= 5 ? '✓ enough, press Next speaker' : '(aim for 5 s)'}
+                Voice captured: {(voiced[currentId] ?? 0).toFixed(1)} s {(voiced[currentId] ?? 0) >= 3 ? (isLastSpeaker ? '✓ enough, press Verify voices' : '✓ enough, press Next speaker') : '(aim for 3 s)'}
               </em>
             ) : null}
           </div>
@@ -192,10 +205,13 @@ export function EnrollScreen() {
           <button type="button" onClick={() => roundtableClient.control('enroll-skip', JSON.stringify(withAliases()))}>Skip</button>
           <button
             type="button"
-            className={live && currentId && heardOk[currentId] ? 'primary' : undefined}
-            onClick={() => roundtableClient.control('enroll-next', JSON.stringify(withAliases()))}
+            className={live && currentId && (heardOk[currentId] || (voiced[currentId] ?? 0) >= 3) ? 'primary' : undefined}
+            onClick={() => {
+              setRecording(false);
+              roundtableClient.control('enroll-next', JSON.stringify(withAliases()));
+            }}
           >
-            Next speaker
+            {isLastSpeaker ? 'Verify voices' : 'Next speaker'}
           </button>
           <button
             type="button"

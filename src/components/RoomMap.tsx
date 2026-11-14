@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { SpeakerShape } from '../contract';
 import { generateHexGrid, hexCorners, hexWorldCenter, worldToMap } from '../lib/map';
 import { useRoundtableStore } from '../state/store';
@@ -20,6 +20,7 @@ export function RoomMap() {
   const frames = useRoundtableStore((state) => state.frames);
   const activeSpeakerId = useRoundtableStore((state) => state.activeSpeakerId);
   const level = useRoundtableStore((state) => state.level);
+  const [windowMode, setWindowMode] = useState<'60s' | 'all'>('all');
 
   const baseCells = useMemo(() => generateHexGrid(tableSize), [tableSize]);
   const fallbackPositions = people.map((person, index) => ({
@@ -43,9 +44,25 @@ export function RoomMap() {
     <section className="room-map card" aria-label="Top-down room map">
       <div className="card-heading map-heading">
         <strong>Room map</strong>
-        <div className="segmented-control" aria-label="Heat window" title="Heat accumulates over the whole session">
-          <span>60 s</span>
-          <span className="active">All</span>
+        <div className="segmented-control" role="group" aria-label="Heat window">
+          <span
+            role="button"
+            tabIndex={0}
+            className={windowMode === '60s' ? 'active' : undefined}
+            onClick={() => setWindowMode('60s')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setWindowMode('60s'); }}
+          >
+            60 s
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            className={windowMode === 'all' ? 'active' : undefined}
+            onClick={() => setWindowMode('all')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setWindowMode('all'); }}
+          >
+            All
+          </span>
         </div>
       </div>
       <svg viewBox={`0 0 ${MAP.width} ${MAP.height}`} role="img" aria-label="Map of speakers around the table">
@@ -81,14 +98,20 @@ export function RoomMap() {
             const points = hexCorners(center, 0.1 * hexScale * 0.9)
               .map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`)
               .join(' ');
+            const rawOpacity =
+              windowMode === '60s'
+                ? hex.ownerId === activeSpeakerId
+                  ? Math.min(1, hex.opacity * 1.15)
+                  : hex.opacity * 0.6
+                : hex.opacity;
             return (
               <polygon
                 key={`heat-${hex.q}:${hex.r}`}
                 points={points}
                 fill={fill}
-                opacity={Math.max(0.13, hex.opacity)}
+                opacity={Math.max(0.14, rawOpacity)}
                 style={{ transition: 'opacity 300ms linear', color: fill }}
-                className={hex.ownerId === activeSpeakerId && hex.opacity > 0.5 ? 'hot-hex' : undefined}
+                className={hex.ownerId === activeSpeakerId && rawOpacity > 0.45 ? 'hot-hex' : undefined}
               />
             );
           })}

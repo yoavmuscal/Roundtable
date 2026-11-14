@@ -169,6 +169,7 @@ def create_app(
     app.state.audio_monitor = None
     app.state.warmed = False
     app.state.voice_warning = None
+    app.state.voice_check = "idle"
 
     def model_label() -> str:
         if mode == "sim":
@@ -185,6 +186,9 @@ def create_app(
         warning = getattr(app.state, "voice_warning", None)
         if warning:
             payload["voiceWarning"] = warning
+        voice_check = getattr(app.state, "voice_check", "idle")
+        if voice_check and voice_check != "idle":
+            payload["voiceCheck"] = voice_check
         return {**payload, **extra}
 
     async def warm_bonsai() -> None:
@@ -255,8 +259,11 @@ def create_app(
             return
         now = current.clock()
         pcm = pcm_between(monitor, monitor.started_wall_monotonic, current.started_monotonic + now)
-        if len(pcm) < 16_000 * 2 * 4:
+        if len(pcm) < 16_000 * 2 * 3:
             return
+        app.state.voice_check = "checking"
+        app.state.voice_warning = None
+        await broadcast(SessionEngine._message(current.clock(), "status", **current_status()))
         workdir = session_dir / "voiceid"
         workdir.mkdir(parents=True, exist_ok=True)
         enroll_wav = workdir / "enroll_check.wav"
@@ -271,6 +278,8 @@ def create_app(
                 enroll_wav, speaker_count=len(current.enrollment_intervals)
             )
         except Exception:
+            app.state.voice_check = "idle"
+            await broadcast(SessionEngine._message(current.clock(), "status", **current_status()))
             return
         if current is not engine():
             return
@@ -280,6 +289,8 @@ def create_app(
         groups = enrollment_collisions(shifted, regions)
         if not groups:
             app.state.voice_warning = None
+            app.state.voice_check = "ok"
+            await broadcast(SessionEngine._message(current.clock(), "status", **current_status()))
             return
         names = current._names()
         parts = [
@@ -287,6 +298,7 @@ def create_app(
             for group in groups
         ]
         app.state.voice_warning = ". ".join(parts)
+        app.state.voice_check = "warn"
         await broadcast(SessionEngine._message(current.clock(), "status", **current_status()))
 
     async def emit(current: SessionEngine, messages: list[dict[str, Any]]) -> None:
@@ -742,8 +754,9 @@ def create_app(
                     pass
             cursor = min(getattr(app.state, "enroll_cursor", 0), len(current.people) - 1)
             now = current.clock()
-            if app.state.voice_warning:
+            if app.state.voice_warning or getattr(app.state, "voice_check", "idle") != "idle":
                 app.state.voice_warning = None
+                app.state.voice_check = "idle"
                 await broadcast(SessionEngine._message(now, "status", **current_status()))
             if action == "enroll_next":
                 current.take_enrollment_sample(current.people[cursor]["id"], now)
@@ -824,9 +837,14 @@ def create_app(
             current.phase = "enroll"
             app.state.enroll_cursor = 0
             app.state.voice_warning = None
+            app.state.voice_check = "idle"
             current.enrollment_intervals = {}
             current.enrollment_armed = False
             current.enrollment_started_at = None
+            if current.calibration is None:
+                current.set_calibration(Calibration(FAKE_CORNERS, FAKE_TABLE))
+            if is_default_calibration(current.calibration):
+                current.use_horizontal_seating()
             await ensure_live_audio()
             ensure_transcriber()
             asyncio.create_task(warm_speakerkit())

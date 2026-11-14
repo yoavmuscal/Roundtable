@@ -233,6 +233,7 @@ class SpeakerFusion:
             and self.previous_end is not None
             and end_s - self.previous_end < self.thresholds["previous_speaker_window_s"]
             and margin < 0.08
+            and not (top_person != self.previous_speaker and top_score >= 0.06 and averages.get(self.previous_speaker, 0.0) < 0.02)
         ):
             result = Attribution(self.previous_speaker, 0.4, reason="previous")
         elif top_score >= self.thresholds["fusion_fallback"] and margin >= 0.03:
@@ -246,7 +247,7 @@ class SpeakerFusion:
         else:
             result = Attribution(None, 0.0, reason="ambiguous")
 
-        if result.speaker_id is not None:
+        if result.speaker_id is not None and result.reason != "previous":
             self.previous_speaker = result.speaker_id
             self.previous_end = end_s
         return result

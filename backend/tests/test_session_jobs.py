@@ -250,3 +250,35 @@ def test_partial_caption_never_pastes_previous_speaker_words_onto_new_speaker() 
     assert last_partial["speakerId"] == "p2"
     assert "Almost really well done" not in last_partial["text"]
     assert last_partial["text"] == "Yes I agree with that"
+
+
+def test_live_heatmap_lights_up_immediately_after_long_enrollment() -> None:
+    """Regression: enrollment at t=200s must not block live heat deposits after start() resets to t=0."""
+    from backend.app.calibration import Calibration
+    from backend.app.fake_session import FAKE_CORNERS, FAKE_TABLE
+    from backend.app.session import SessionEngine
+
+    engine = SessionEngine()
+    engine.set_calibration(Calibration(FAKE_CORNERS, FAKE_TABLE))
+    engine.use_horizontal_seating()
+    engine.set_enrolled_people(engine.people[:2])
+
+    # Simulate enrollment occurring around t=180..200s on the pre-session clock.
+    for step in range(1800, 2000, 2):
+        t = step / 10
+        engine.handle_level(t, 0.05)
+        engine.handle_faces(t, [_face(0.30, 0.8, 0), _face(0.75, 0.0, 8)])
+
+    engine.start()
+    map_msgs = []
+    for step in range(10):
+        t = step / 10
+        engine.handle_level(t, 0.045 if step % 2 == 0 else 0.008)  # real syllable dips
+        out = engine.handle_faces(t, [_face(0.30, 0.0, 0), _face(0.75, 0.7, 8)])
+        map_msgs.extend(m for m in out if m["type"] == "map" and m["hexes"])
+
+    assert map_msgs, "Expected live hex map updates within 1s after start()"
+    hexes = map_msgs[-1]["hexes"]
+    assert any(h["owner"] == "p2" for h in hexes)
+    # Far-side horizontal seats sit at y = -0.45 m (r < 0), never behind the camera (r >= 8).
+    assert all(h["axial"]["r"] < 5 for h in hexes)

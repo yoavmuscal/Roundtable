@@ -202,6 +202,11 @@ class SessionEngine:
             return Point(min(1.0, max(0.0, shoulder.x)) * width, -seat_offset_m)
 
         self.tracker.seat_mapper = seat
+        # Snap any tracks already created during Setup/Enroll onto the far table edge.
+        for track in self.tracker.tracks.values():
+            track.seat_position = seat(track.smoothed.shoulder_point)
+            track.seat_candidate = None
+            track.seat_candidate_since = None
 
     def begin_enrollment(self, time_s: float) -> None:
         self.enrollment_started_at = time_s
@@ -460,6 +465,24 @@ class SessionEngine:
         self._face_samples = []
         self._last_track_count = len(self.tracker.tracks)
         self.started_monotonic = new_origin
+        # Reset every pre-session clock state so live heat, glow, away timers, and mouth
+        # fusion start cleanly at t=0.0 instead of carrying enrollment timestamps.
+        self.last_heat_deposit = -1.0
+        self.active_gate = ActiveSpeakerGate()
+        self.active_speaker = None
+        self.off_camera = False
+        self.caption_speaker = None
+        self.caption_speaker_at = -99.0
+        self.fusion = SpeakerFusion(self.thresholds)
+        for track in self.tracker.tracks.values():
+            track.first_seen = 0.0
+            track.last_seen = 0.0
+            track.pending_anchor_since = None
+            track.seat_candidate_since = None
+            for flt in track.filters.values():
+                flt.time = None
+            if self.tracker.seat_mapper is not None:
+                track.seat_position = self.tracker.seat_mapper(track.smoothed.shoulder_point)
         self.align_enrolled_faces()
         # Enrollment speech is not part of the meeting: start the transcript fresh.
         self.turns = []
@@ -472,6 +495,7 @@ class SessionEngine:
         messages = [
             self._message(0.0, "phase", phase="live"),
             self._message(0.0, "people", people=self.people),
+            self._message(0.0, "map", mode="all", hexes=[], camera=None),
         ]
         if self.calibration:
             messages.append(self._message(0.0, "calibration_result", **self.calibration.result()))
@@ -508,13 +532,14 @@ class SessionEngine:
         # While someone is being captioned, the glow and the map follow the caption's speaker,
         # so bubble, glow and hex map always agree; otherwise use the most active mouth.
         caption_speaker = getattr(self, "caption_speaker", None)
-        caption_recent = time_s - getattr(self, "caption_speaker_at", -99.0) <= 1.5
+        caption_recent = 0.0 <= time_s - getattr(self, "caption_speaker_at", -99.0) <= 1.5
         proposed = caption_speaker if caption_speaker and caption_recent else self._strongest_visible_speaker(time_s)
-        active = self.active_gate.update(time_s, proposed, self.last_rms)
+        recent_rms = max(self.last_rms, self.fusion.max_rms(max(0.0, time_s - 0.25), time_s))
+        active = self.active_gate.update(time_s, proposed, recent_rms)
         messages = [self._message(time_s, "people_frame", people=frame)]
         if active != self.active_speaker:
             self.active_speaker = active
-            self.off_camera = self.last_rms >= self.active_gate.rms_floor and active is None
+            self.off_camera = recent_rms >= self.active_gate.rms_floor and active is None
             messages.append(
                 self._message(
                     time_s,
@@ -526,7 +551,7 @@ class SessionEngine:
         if active and self.heat and time_s - self.last_heat_deposit >= 0.2:
             track = self.tracker.tracks.get(active)
             if track and track.seat_position:
-                self.heat.deposit(time_s, active, track.seat_position, 0.2, min(1.0, self.last_rms / 0.055))
+                self.heat.deposit(time_s, active, track.seat_position, 0.2, min(1.0, recent_rms / 0.045))
                 self.last_heat_deposit = time_s
                 messages.append(
                     self._message(
