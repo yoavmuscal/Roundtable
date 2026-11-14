@@ -140,6 +140,11 @@ class AnswerPayload(TypedDict):
     citedTurnIds: list[str]
 
 
+class ErrorPayload(TypedDict, total=False):
+    message: str
+    code: str
+
+
 ClientMessage = dict[str, Any]
 ServerMessage = dict[str, Any]
 
@@ -148,7 +153,7 @@ CONTRACT_VERSION = 1
 DEFAULT_PEOPLE: list[Person] = [
     {"id": "p1", "name": "Yoav", "aliases": ["Yoav"], "color": "#8B7CF6", "shape": "circle"},
     {"id": "p2", "name": "Maya", "aliases": ["Maya"], "color": "#2DD4A7", "shape": "square"},
-    {"id": "p3", "name": "Alex", "aliases": ["Alex"], "color": "#F5A524", "shape": "diamond"},
+    {"id": "p3", "name": "Lee", "aliases": ["Lee"], "color": "#F5A524", "shape": "diamond"},
 ]
 
 DEFAULT_TABLE_SIZE: Size = {"width": 1.8, "height": 0.9}

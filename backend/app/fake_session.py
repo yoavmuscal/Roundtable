@@ -44,7 +44,7 @@ FAKE_TABLE = TableSize(1.8, 0.9)
 FAKE_PEOPLE = (
     {"id": "p1", "name": "Yoav", "color": "#8B7CF6", "shape": "circle"},
     {"id": "p2", "name": "Maya", "color": "#2DD4A7", "shape": "square"},
-    {"id": "p3", "name": "Alex", "color": "#F5A524", "shape": "diamond"},
+    {"id": "p3", "name": "Lee", "color": "#F5A524", "shape": "diamond"},
 )
 
 

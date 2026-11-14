@@ -64,8 +64,10 @@ def create_app(session_dir: Path) -> FastAPI:
     @app.get("/video")
     async def video() -> FileResponse:
         if replay.video_path is None or not replay.video_path.exists():
-            raise HTTPException(status_code=404, detail="No silhouette video was generated")
-        return FileResponse(replay.video_path, media_type="image/gif")
+            raise HTTPException(status_code=404, detail="No session video was recorded")
+        media_types = {".gif": "image/gif", ".webm": "video/webm", ".mp4": "video/mp4"}
+        media_type = media_types.get(replay.video_path.suffix.lower(), "application/octet-stream")
+        return FileResponse(replay.video_path, media_type=media_type)
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:

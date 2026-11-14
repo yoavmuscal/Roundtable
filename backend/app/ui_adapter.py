@@ -209,7 +209,10 @@ def internal_to_ui(message: dict[str, Any]) -> dict[str, Any] | None:
             },
         }
     if message_type == "error":
-        return {"type": "error", "message": message.get("message", "Backend error")}
+        payload: dict[str, Any] = {"type": "error", "message": message.get("message", "Backend error")}
+        if message.get("code") is not None:
+            payload["code"] = message["code"]
+        return payload
     return message
 
 

@@ -194,14 +194,15 @@ export type ServerMessage =
   | { type: 'phase'; phase: Phase }
   | { type: 'refine-progress'; progress: number; message: string }
   | { type: 'refined'; refined: RefinedPayload }
-  | { type: 'replay'; session: string; videoUrl?: string; speed: number };
+  | { type: 'replay'; session: string; videoUrl?: string; speed: number }
+  | { type: 'error'; message: string; code?: string };
 
 export const CONTRACT_VERSION = 1;
 
 export const DEFAULT_PEOPLE: Person[] = [
   { id: 'p1', name: 'Yoav', aliases: ['Yoav'], color: '#8B7CF6', shape: 'circle' },
   { id: 'p2', name: 'Maya', aliases: ['Maya'], color: '#2DD4A7', shape: 'square' },
-  { id: 'p3', name: 'Alex', aliases: ['Alex'], color: '#F5A524', shape: 'diamond' },
+  { id: 'p3', name: 'Lee', aliases: ['Lee'], color: '#F5A524', shape: 'diamond' },
 ];
 
 export const DEFAULT_TABLE_SIZE: Size = { width: 1.8, height: 0.9 };
