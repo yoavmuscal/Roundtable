@@ -207,7 +207,11 @@ class SessionEngine:
             self.clock(),
             "enroll_prompt",
             personId=person["id"],
-            prompt=f"{person.get('name', person['id'])}, please say: \u201cRoundtable keeps this conversation private.\u201d",
+            prompt=(
+                f"{person.get('name', person['id'])}, please read both sentences: "
+                "\u201cRoundtable keeps this conversation private.\u201d "
+                "\u201cEveryone at the table should be easy to follow.\u201d"
+            ),
             index=cursor,
             total=len(self.people),
         )

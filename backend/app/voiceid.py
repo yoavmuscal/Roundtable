@@ -18,7 +18,7 @@ from .refine import SpeakerSegment, parse_speakerkit_output
 
 SAMPLE_RATE = 16_000
 GAP_S = 0.4
-MAX_ENROLL_S = 6.0
+MAX_ENROLL_S = 12.0
 MAX_TURN_S = 10.0
 MIN_CLIP_S = 1.0
 
@@ -31,6 +31,29 @@ class VoiceMatch:
 
 def _overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
+
+
+def _cluster_of_region(segments: list[SpeakerSegment], start: float, end: float) -> str | None:
+    cover: dict[str, float] = {}
+    for segment in segments:
+        cover[segment.cluster] = cover.get(segment.cluster, 0.0) + _overlap(segment.start, segment.end, start, end)
+    if not cover:
+        return None
+    cluster, amount = max(cover.items(), key=lambda item: item[1])
+    if amount < 0.4 * max(0.01, end - start):
+        return None
+    return cluster
+
+
+def enrollment_collisions(segments: list[SpeakerSegment], regions: dict[str, tuple[float, float]]) -> list[list[str]]:
+    """People whose enrollment clips landed in the same SpeakerKit cluster."""
+    groups: dict[str, list[str]] = {}
+    for person_id, (start, end) in regions.items():
+        cluster = _cluster_of_region(segments, start, end)
+        if cluster is None:
+            continue
+        groups.setdefault(cluster, []).append(person_id)
+    return [people for people in groups.values() if len(people) >= 2]
 
 
 def match_turn(
@@ -70,36 +93,62 @@ class VoiceIdentifier:
         self.workdir = workdir
         self.lock = asyncio.Lock()
 
+    async def alike_groups(self, enrollment: dict[str, bytes]) -> list[list[str]]:
+        """SpeakerKit on the enrollment clips. Groups that share one voice cluster."""
+        clips = {
+            person: pcm[-int(MAX_ENROLL_S * SAMPLE_RATE) * 2 :]
+            for person, pcm in enrollment.items()
+            if len(pcm) >= MIN_CLIP_S * SAMPLE_RATE * 2
+        }
+        if len(clips) < 2:
+            return []
+        async with self.lock:
+            segments, regions, _turn = await self._diarize(clips, b"")
+        if not segments:
+            return []
+        return enrollment_collisions(segments, regions)
+
     async def identify(self, enrollment: dict[str, bytes], turn_pcm: bytes) -> VoiceMatch:
         clips = {person: pcm[-int(MAX_ENROLL_S * SAMPLE_RATE) * 2:] for person, pcm in enrollment.items() if len(pcm) >= MIN_CLIP_S * SAMPLE_RATE * 2}
         turn_pcm = turn_pcm[-int(MAX_TURN_S * SAMPLE_RATE) * 2:]
         if len(clips) < 2 or len(turn_pcm) < MIN_CLIP_S * SAMPLE_RATE * 2:
             return VoiceMatch(None, 0.0)
         async with self.lock:
-            self.workdir.mkdir(parents=True, exist_ok=True)
-            wav_path = self.workdir / "voiceid.wav"
-            rttm_path = self.workdir / "voiceid.rttm"
-            gap = b"\x00\x00" * int(GAP_S * SAMPLE_RATE)
-            regions: dict[str, tuple[float, float]] = {}
-            audio = bytearray()
-            for person, pcm in clips.items():
-                start = len(audio) / 2 / SAMPLE_RATE
-                audio.extend(pcm)
-                regions[person] = (start, len(audio) / 2 / SAMPLE_RATE)
-                audio.extend(gap)
+            segments, regions, turn_region = await self._diarize(clips, turn_pcm)
+        if turn_region is None or not segments:
+            return VoiceMatch(None, 0.0)
+        return match_turn(segments, regions, turn_region)
+
+    async def _diarize(
+        self,
+        clips: dict[str, bytes],
+        turn_pcm: bytes,
+    ) -> tuple[list[SpeakerSegment], dict[str, tuple[float, float]], tuple[float, float] | None]:
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        wav_path = self.workdir / "voiceid.wav"
+        rttm_path = self.workdir / "voiceid.rttm"
+        gap = b"\x00\x00" * int(GAP_S * SAMPLE_RATE)
+        regions: dict[str, tuple[float, float]] = {}
+        audio = bytearray()
+        for person, pcm in clips.items():
+            start = len(audio) / 2 / SAMPLE_RATE
+            audio.extend(pcm)
+            regions[person] = (start, len(audio) / 2 / SAMPLE_RATE)
+            audio.extend(gap)
+        turn_region = None
+        if turn_pcm:
             turn_start = len(audio) / 2 / SAMPLE_RATE
             audio.extend(turn_pcm)
             turn_region = (turn_start, len(audio) / 2 / SAMPLE_RATE)
-            with wave.open(str(wav_path), "wb") as handle:
-                handle.setnchannels(1)
-                handle.setsampwidth(2)
-                handle.setframerate(SAMPLE_RATE)
-                handle.writeframes(bytes(audio))
-            rttm_path.unlink(missing_ok=True)
-            command = [part.format(wav=str(wav_path), speakers=len(clips), rttm=str(rttm_path)) for part in self.command]
-            process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            await process.communicate()
-            if process.returncode != 0 or not rttm_path.exists():
-                return VoiceMatch(None, 0.0)
-            segments = parse_speakerkit_output(rttm_path.read_text(encoding="utf-8"))
-        return match_turn(segments, regions, turn_region)
+        with wave.open(str(wav_path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(SAMPLE_RATE)
+            handle.writeframes(bytes(audio))
+        rttm_path.unlink(missing_ok=True)
+        command = [part.format(wav=str(wav_path), speakers=len(clips), rttm=str(rttm_path)) for part in self.command]
+        process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await process.communicate()
+        if process.returncode != 0 or not rttm_path.exists():
+            return [], regions, turn_region
+        return parse_speakerkit_output(rttm_path.read_text(encoding="utf-8")), regions, turn_region

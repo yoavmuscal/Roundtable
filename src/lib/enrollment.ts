@@ -1,7 +1,12 @@
-/** The sentence inside the enrollment prompt's quotes, e.g. “Roundtable keeps this conversation private.” */
+/** Quoted sentences in the enrollment prompt (one or two). */
+export function promptSentences(prompt: string): string[] {
+  const quoted = [...prompt.matchAll(/[“"]([^”"]+)[”"]/g)].map((match) => match[1].trim()).filter(Boolean);
+  return quoted.length ? quoted : [prompt.trim()].filter(Boolean);
+}
+
+/** The first quoted sentence. Kept for callers that expect a single line. */
 export function promptSentence(prompt: string): string {
-  const quoted = prompt.match(/[“"]([^”"]+)[”"]/);
-  return (quoted ? quoted[1] : prompt).trim();
+  return promptSentences(prompt)[0] ?? '';
 }
 
 function words(text: string): string[] {
@@ -17,11 +22,21 @@ function words(text: string): string[] {
  * Did Argmax hear the enrollment sentence? Whisper may write "Round table keeps his
  * conversation private", so count how many of the sentence's words appear.
  */
-export function sentenceHeard(prompt: string, heard: string | undefined, threshold = 0.6): boolean {
-  if (!heard) return false;
-  const target = words(promptSentence(prompt));
-  if (!target.length) return false;
+function coverage(sentence: string, heard: string): number {
+  const target = words(sentence);
+  if (!target.length) return 0;
   const got = new Set(words(heard));
-  const found = target.filter((word) => got.has(word)).length;
-  return found / target.length >= threshold;
+  return target.filter((word) => got.has(word)).length / target.length;
+}
+
+/** Which prompt sentences Argmax has heard (word overlap, so "Round table" still counts). */
+export function sentencesHeard(prompt: string, heard: string | undefined, threshold = 0.6): boolean[] {
+  const sentences = promptSentences(prompt);
+  if (!heard) return sentences.map(() => false);
+  return sentences.map((sentence) => coverage(sentence, heard) >= threshold);
+}
+
+export function sentenceHeard(prompt: string, heard: string | undefined, threshold = 0.6): boolean {
+  const flags = sentencesHeard(prompt, heard, threshold);
+  return flags.length > 0 && flags.every(Boolean);
 }

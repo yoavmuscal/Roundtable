@@ -120,6 +120,8 @@ export interface StatusPayload {
   connected: boolean;
   /** Argmax streaming transcriber: off, loading (model warming ~20 s) or listening. */
   transcriberState?: 'off' | 'loading' | 'listening';
+  /** SpeakerKit put two people's enrollment clips in the same voice group. */
+  voiceWarning?: string;
 }
 
 export interface RefinedPayload {

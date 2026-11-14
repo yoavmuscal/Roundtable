@@ -162,6 +162,7 @@ def create_app(
     app.state.transcriber_state = "off"  # off | loading | listening
     app.state.audio_monitor = None
     app.state.warmed = False
+    app.state.voice_warning = None
 
     def model_label() -> str:
         if mode == "sim":
@@ -175,6 +176,9 @@ def create_app(
         payload["backend"] = "live" if mode == "live" else "simulation"
         payload["transcriber"] = " ".join(transcriber_command()[:1]) or None
         payload["transcriberState"] = app.state.transcriber_state
+        warning = getattr(app.state, "voice_warning", None)
+        if warning:
+            payload["voiceWarning"] = warning
         return {**payload, **extra}
 
     async def warm_bonsai() -> None:
@@ -245,6 +249,28 @@ def create_app(
         if match.person_id and match.coverage >= 0.6 and current is engine():
             for message in current.reassign_turn(turn_id_, match.person_id, match.coverage):
                 await broadcast(message)
+
+    async def check_enrollment_voices(current: SessionEngine) -> None:
+        """Warn when two enrollment clips fall in the same SpeakerKit voice group."""
+        monitor = app.state.audio_monitor
+        if voice_ids is None or monitor is None or len(current.people) < 2:
+            return
+        try:
+            groups = await voice_ids.alike_groups(current.enrollment_audio(monitor))
+        except Exception:
+            return
+        if current is not engine():
+            return
+        if not groups:
+            app.state.voice_warning = None
+            return
+        names = current._names()
+        parts = [
+            " and ".join(names.get(person_id, person_id) for person_id in group) + " sound alike, please redo"
+            for group in groups
+        ]
+        app.state.voice_warning = ". ".join(parts)
+        await broadcast(SessionEngine._message(current.clock(), "status", **current_status()))
 
     async def emit(current: SessionEngine, messages: list[dict[str, Any]]) -> None:
         for message in messages:
@@ -600,6 +626,9 @@ def create_app(
                     pass
             cursor = min(getattr(app.state, "enroll_cursor", 0), len(current.people) - 1)
             now = current.clock()
+            if app.state.voice_warning:
+                app.state.voice_warning = None
+                await broadcast(SessionEngine._message(now, "status", **current_status()))
             if action == "enroll_next":
                 current.record_enrollment(current.people[cursor]["id"], now)
                 cursor += 1
@@ -611,6 +640,7 @@ def create_app(
             app.state.enroll_cursor = min(cursor, len(current.people) - 1)
             if cursor >= len(current.people):
                 await broadcast(SessionEngine._message(now, "status", enrollment="complete", **current_status()))
+                asyncio.create_task(check_enrollment_voices(current))
             else:
                 await broadcast(current.enroll_prompt(app.state.enroll_cursor))
         elif action == "recalibrate":
@@ -626,6 +656,7 @@ def create_app(
                     pass
             current.phase = "enroll"
             app.state.enroll_cursor = 0
+            app.state.voice_warning = None
             current.enrollment_intervals = {}
             await ensure_live_audio()
             ensure_transcriber()

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { sentenceHeard } from '../lib/enrollment';
+import { promptSentences, sentenceHeard, sentencesHeard } from '../lib/enrollment';
 import { MAX_PEOPLE, MIN_PEOPLE, addPerson, removePerson } from '../lib/people';
 import { ShapeGlyph } from '../lib/shape';
 import { roundtableClient } from '../services/roundtableClient';
@@ -32,14 +32,17 @@ export function EnrollScreen() {
     setVoiced((current) => ({ ...current, [currentId]: (current[currentId] ?? 0) + step }));
   }, [level, sessionTime, currentId]);
   const heard = useRoundtableStore((state) => {
-    const latest = Object.values(state.captions)
+    const lines = Object.values(state.captions)
       .filter((caption) => (caption.end ?? caption.start) >= promptStartedAt)
-      .sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
-    return latest?.text;
+      .sort((a, b) => (a.end ?? a.start) - (b.end ?? b.start))
+      .map((caption) => caption.text);
+    return lines.join(' ');
   });
-  // People whose enrollment sentence Argmax recognised (kept after moving to the next person).
-  const [heardOk, setHeardOk] = useState<Record<string, boolean>>({});
+  const sentences = enrollPrompt ? promptSentences(enrollPrompt.prompt) : [];
+  const heardFlags = enrollPrompt ? sentencesHeard(enrollPrompt.prompt, heard) : [];
   const currentHeard = Boolean(enrollPrompt && currentId && sentenceHeard(enrollPrompt.prompt, heard));
+  // People whose enrollment sentences Argmax recognised (kept after moving to the next person).
+  const [heardOk, setHeardOk] = useState<Record<string, boolean>>({});
   useEffect(() => {
     if (currentHeard && currentId) setHeardOk((current) => (current[currentId] ? current : { ...current, [currentId]: true }));
   }, [currentHeard, currentId]);
@@ -81,15 +84,23 @@ export function EnrollScreen() {
         <p className="eyebrow">Step 2 · Enroll speakers</p>
         <h1>Names power the alert a Deaf user should never miss.</h1>
         <p>
-          Add each person's name and optional aliases. During enrollment, ask each person to say a
-          short sentence so the final refine pass can match voices to seats.
+          Add each person's name and optional aliases. Each person reads two sentences
+          (about five seconds) so the final refine pass can match voices to seats.
         </p>
         {enrollPrompt ? (
-          <div className="enroll-prompt" role="status">
+          <div className={currentHeard ? 'enroll-prompt heard' : 'enroll-prompt'} role="status">
             <span>
               {enrollPrompt.index + 1} of {enrollPrompt.total}
             </span>
-            <strong>{enrollPrompt.prompt}</strong>
+            <strong>Read both sentences out loud.</strong>
+            <ul className="sentence-checks">
+              {sentences.map((sentence, index) => (
+                <li key={sentence} className={heardFlags[index] ? 'ok' : undefined}>
+                  <span aria-hidden="true">{heardFlags[index] ? '✓' : index + 1}</span>
+                  {sentence}
+                </li>
+              ))}
+            </ul>
             <em className="enroll-heard">
               {!live
                 ? 'Replay mode: voice enrollment runs only in live mode.'
@@ -99,18 +110,21 @@ export function EnrollScreen() {
                     ? `Heard: “${heard}”`
                     : 'Listening… speak now.'}
             </em>
-            {live && currentId && heardOk[currentId] ? (
+            {live && currentId && currentHeard ? (
               <div className="sentence-heard" role="status">
                 <span aria-hidden="true">✓</span>
                 <div>
-                  <strong>Sentence heard</strong>
-                  <small>Argmax recognised it. Press Next speaker.</small>
+                  <strong>Both sentences heard</strong>
+                  <small>Argmax recognised them. Press Next speaker.</small>
                 </div>
               </div>
             ) : null}
+            {status.voiceWarning ? (
+              <div className="voice-warning" role="alert">{status.voiceWarning}</div>
+            ) : null}
             {live && currentId ? (
               <em className="enroll-captured">
-                Voice captured: {(voiced[currentId] ?? 0).toFixed(1)} s {(voiced[currentId] ?? 0) >= 2 ? '✓ enough, press Next speaker' : '(aim for 2 s)'}
+                Voice captured: {(voiced[currentId] ?? 0).toFixed(1)} s {(voiced[currentId] ?? 0) >= 5 ? '✓ enough, press Next speaker' : '(aim for 5 s)'}
               </em>
             ) : null}
           </div>
@@ -151,13 +165,18 @@ export function EnrollScreen() {
         {people.map((person, index) => (
           <article
             key={person.id}
-            className={enrollPrompt?.personId === person.id ? 'enroll-card current' : 'enroll-card'}
+            className={[
+              'enroll-card',
+              enrollPrompt?.personId === person.id ? 'current' : '',
+              heardOk[person.id] ? 'heard' : '',
+            ].filter(Boolean).join(' ')}
             style={{ borderColor: person.color }}
             aria-current={enrollPrompt?.personId === person.id ? 'step' : undefined}
           >
             <div className="person-heading">
               <ShapeGlyph shape={person.shape} color={person.color} size={24} />
               <span>Speaker {index + 1}</span>
+              {heardOk[person.id] ? <em className="heard-stamp">✓ Heard</em> : null}
               <button
                 type="button"
                 className="remove-person"
@@ -184,9 +203,9 @@ export function EnrollScreen() {
             {live ? (
               <p className={heardOk[person.id] ? 'voice-done' : 'voice-pending'}>
                 {heardOk[person.id]
-                  ? '✓ Sentence heard'
+                  ? '✓ Both sentences heard'
                   : enrollPrompt?.personId === person.id
-                    ? 'Listening for the sentence…'
+                    ? 'Listening for both sentences…'
                     : 'Not enrolled yet'}
               </p>
             ) : null}

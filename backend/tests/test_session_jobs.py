@@ -133,3 +133,23 @@ def test_voice_match_names_clusters_from_enrollment() -> None:
     # Both enrollment samples in one cluster: SpeakerKit cannot tell them apart, so no guess.
     same = [SpeakerSegment(0.0, 8.5, "A"), SpeakerSegment(8.8, 13.0, "A")]
     assert match_turn(same, regions, (8.8, 13.2)).person_id is None
+
+
+def test_enrollment_collisions_names_people_who_share_a_voice() -> None:
+    from backend.app.refine import SpeakerSegment
+    from backend.app.voiceid import enrollment_collisions
+
+    regions = {"p1": (0.0, 4.4), "p2": (4.8, 8.5), "p3": (8.9, 13.0)}
+    split = [
+        SpeakerSegment(0.0, 4.4, "A"),
+        SpeakerSegment(4.8, 8.5, "B"),
+        SpeakerSegment(8.9, 13.0, "C"),
+    ]
+    assert enrollment_collisions(split, regions) == []
+    alike = [
+        SpeakerSegment(0.0, 4.4, "A"),
+        SpeakerSegment(4.8, 8.5, "A"),
+        SpeakerSegment(8.9, 13.0, "B"),
+    ]
+    groups = enrollment_collisions(alike, regions)
+    assert groups == [["p1", "p2"]]

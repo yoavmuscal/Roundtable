@@ -125,6 +125,8 @@ class StatusPayload(TypedDict, total=False):
     connected: bool
     # Argmax streaming transcriber: off, loading (model warming ~20 s) or listening.
     transcriberState: Literal["off", "loading", "listening"]
+    # Set when SpeakerKit puts two enrollment clips in one voice group.
+    voiceWarning: str
 
 
 class RefinedPayload(TypedDict):
