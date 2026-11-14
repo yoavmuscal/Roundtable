@@ -279,6 +279,7 @@ class SessionEngine:
 
     def handle_level(self, time_s: float, rms: float, peak: float | None = None) -> dict[str, Any]:
         self.last_rms = rms
+        self.fusion.add_level(time_s, rms)
         message = self._message(time_s, "level", rms=rms, peak=peak if peak is not None else rms)
         self.recorder.record(message)
         return message
@@ -550,14 +551,17 @@ class SessionEngine:
         return time.monotonic() - self.started_monotonic
 
     def _strongest_visible_speaker(self, time_s: float) -> str | None:
-        best: tuple[float, str] | None = None
-        for track in self.tracker.tracks.values():
-            if track.state == "away":
-                continue
-            score = track.observation.mouth_score
-            if best is None or score > best[0]:
-                best = (score, track.id)
-        return best[1] if best and best[0] >= 0.25 else None
+        """Pick the face whose mouth is moving with the mic, not just the biggest jaw."""
+        away = {track.id for track in self.tracker.tracks.values() if track.state == "away"}
+        scores = {
+            person: score
+            for person, score in self.fusion.fused_scores(max(0.0, time_s - 0.5), time_s).items()
+            if person not in away and person in self.tracker.tracks
+        }
+        if not scores:
+            return None
+        best_id, best_score = max(scores.items(), key=lambda item: item[1])
+        return best_id if best_score >= 0.25 else None
 
     def _finalize_turn(self, turn: Turn) -> list[dict[str, Any]]:
         self.turns.append(turn)

@@ -38,6 +38,32 @@ def test_fusion_fallback_025_is_dashed() -> None:
     assert result.dashed
 
 
+def test_fusion_prefers_mouth_that_tracks_mic() -> None:
+    """Nodding/chewing (constant high jaw) loses to the mouth that rises with the mic."""
+    fusion = SpeakerFusion()
+    for t in (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7):
+        # Mic and talker mouth rise together in the middle of the window.
+        rms = 0.01 + (0.06 if 0.2 <= t <= 0.5 else 0.0)
+        talker_mouth = 0.1 + (0.75 if 0.2 <= t <= 0.5 else 0.0)
+        nodder_mouth = 0.85  # always "moving"
+        fusion.add_level(t, rms)
+        fusion.add_sample(t, "talker", talker_mouth)
+        fusion.add_sample(t, "nodder", nodder_mouth)
+    result = fusion.attribute(0.0, 0.7)
+    assert result.speaker_id == "talker"
+    assert result.reason == "clear"
+
+
+def test_fusion_chewing_in_silence_is_ambiguous() -> None:
+    fusion = SpeakerFusion()
+    for t in (0.0, 0.1, 0.2, 0.3, 0.4):
+        fusion.add_level(t, 0.004)
+        fusion.add_sample(t, "chewer", 0.9)
+        fusion.add_sample(t, "still", 0.05)
+    result = fusion.attribute(0.0, 0.4)
+    assert result.speaker_id is None or result.dashed or result.reason != "clear"
+
+
 def test_glow_needs_sound_and_hysteresis() -> None:
     gate = ActiveSpeakerGate()
     assert gate.update(0.0, "p1", 0.0) is None

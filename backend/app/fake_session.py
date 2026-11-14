@@ -183,6 +183,7 @@ def generate_session(output_dir: Path, include_video: bool = True) -> dict[str, 
         for index, item in enumerate((observation(i, time_s, active_index == i) for i in range(3))):
             fusion.add_sample(time_s, f"p{index + 1}", item.mouth_score)
         rms = 0.055 if active_turn else 0.006
+        fusion.add_level(time_s, rms)
         if abs(time_s * 20 - round(time_s * 20)) < 1e-6:
             events.append(event(time_s, "level", rms=rms, peak=rms * 1.3))
         proposed = f"p{active_index + 1}" if active_index is not None else None
