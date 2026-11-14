@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MAX_PEOPLE, MIN_PEOPLE, addPerson, removePerson } from '../lib/people';
 import { ShapeGlyph } from '../lib/shape';
 import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
@@ -14,13 +15,16 @@ export function EnrollScreen() {
     setPeopleNames(people.map((person) => (person.id === personId ? { ...person, name } : person)));
   };
 
-  const start = () => {
-    const withAliases = people.map((person) => ({
+  const withAliases = () =>
+    people.map((person) => ({
       ...person,
       aliases: [person.name, ...(aliases[person.id]?.split(',').map((item) => item.trim()).filter(Boolean) ?? [])],
     }));
-    setPeopleNames(withAliases);
-    roundtableClient.control('start', JSON.stringify(withAliases));
+
+  const start = () => {
+    const enrolled = withAliases();
+    setPeopleNames(enrolled);
+    roundtableClient.control('start', JSON.stringify(enrolled));
     setPhase('live');
   };
 
@@ -42,18 +46,44 @@ export function EnrollScreen() {
           </div>
         ) : null}
         <div className="button-row">
-          <button type="button" onClick={() => roundtableClient.control('enroll-redo')}>Redo sample</button>
-          <button type="button" onClick={() => roundtableClient.control('enroll-skip')}>Skip</button>
-          <button type="button" onClick={() => roundtableClient.control('enroll-next')}>Next speaker</button>
+          <button
+            type="button"
+            onClick={() => setPeopleNames(addPerson(people))}
+            disabled={people.length >= MAX_PEOPLE}
+            title={people.length >= MAX_PEOPLE ? 'Roundtable tracks up to four people' : 'Add another speaker'}
+          >
+            + Add speaker
+          </button>
+          <span className="people-count">{people.length} of {MAX_PEOPLE} seats</span>
+        </div>
+        <div className="button-row">
+          <button type="button" onClick={() => roundtableClient.control('enroll-redo', JSON.stringify(withAliases()))}>Redo sample</button>
+          <button type="button" onClick={() => roundtableClient.control('enroll-skip', JSON.stringify(withAliases()))}>Skip</button>
+          <button type="button" onClick={() => roundtableClient.control('enroll-next', JSON.stringify(withAliases()))}>Next speaker</button>
           <button type="button" className="primary" onClick={start}>Start live session</button>
         </div>
       </section>
       <section className="enroll-cards" aria-label="Speaker enrollment">
         {people.map((person, index) => (
-          <article key={person.id} className="enroll-card" style={{ borderColor: person.color }}>
+          <article
+            key={person.id}
+            className={enrollPrompt?.personId === person.id ? 'enroll-card current' : 'enroll-card'}
+            style={{ borderColor: person.color }}
+            aria-current={enrollPrompt?.personId === person.id ? 'step' : undefined}
+          >
             <div className="person-heading">
               <ShapeGlyph shape={person.shape} color={person.color} size={24} />
               <span>Speaker {index + 1}</span>
+              <button
+                type="button"
+                className="remove-person"
+                onClick={() => setPeopleNames(removePerson(people, person.id))}
+                disabled={people.length <= MIN_PEOPLE}
+                aria-label={`Remove ${person.name}`}
+                title="Remove this speaker"
+              >
+                ×
+              </button>
             </div>
             <label>
               Name

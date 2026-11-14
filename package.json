@@ -14,7 +14,11 @@
     "start": "npm run build && node scripts/python.mjs -m backend.app.server --mode sim",
     "test": "vitest run && node scripts/python.mjs -m pytest -q",
     "typecheck": "tsc --noEmit",
-    "vision:check": "node scripts/python.mjs scripts/check_vision_assets.py"
+    "vision:check": "node scripts/python.mjs scripts/check_vision_assets.py",
+    "live": "npm run build && node scripts/python.mjs scripts/live.py",
+    "live:dev": "node scripts/python.mjs scripts/live.py",
+    "bonsai": "node scripts/python.mjs -m mlx_vlm.server --model models/bonsai2-2b-mlx --host 127.0.0.1 --port 8080",
+    "setup:models": "node scripts/python.mjs scripts/setup_models.py"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.2.3",

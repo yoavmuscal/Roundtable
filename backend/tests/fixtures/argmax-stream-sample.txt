@@ -1,0 +1,31 @@
+Transcribing audio stream, press Ctrl+C to stop.
+---
+Current text: Waiting for speech...
+---
+Current text: <|startoftranscript|><|nocaptions|>
+---
+Unconfirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> [BLANK_AUDIO]<|2.10|><|endoftext|>
+Current text: <|startoftranscript|><|en|><|transcribe|><|0.00|> Should we
+---
+Unconfirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> [BLANK_AUDIO]<|2.10|>
+Unconfirmed segment: <|2.10|> >> Should we spend the credits<|4.00|>
+Current text: <|startoftranscript|><|en|><|transcribe|><|0.00|> Should we spend the credits on
+---
+Unconfirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> [BLANK_AUDIO]<|2.10|>
+Unconfirmed segment: <|2.10|> >> Should we spend the credits on Kimi now?<|5.20|>
+Current text: 
+---
+Confirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> [BLANK_AUDIO]<|2.10|>
+Confirmed segment: <|2.10|> >> Should we spend the credits on Kimi now?<|5.20|>
+Unconfirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> [ Inaudible Remark ]<|1.00|>
+Current text: 
+---
+Confirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> [BLANK_AUDIO]<|2.10|>
+Confirmed segment: <|2.10|> >> Should we spend the credits on Kimi now?<|5.20|>
+Unconfirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> >> Use them now.<|1.60|><|endoftext|>
+Current text: <|startoftranscript|><|en|><|transcribe|><|0.00|> Use them now.
+---
+Confirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> [BLANK_AUDIO]<|2.10|>
+Confirmed segment: <|2.10|> >> Should we spend the credits on Kimi now?<|5.20|>
+Confirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> >> Use them now.<|1.60|>
+Current text: 

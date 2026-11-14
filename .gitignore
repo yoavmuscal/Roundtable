@@ -26,3 +26,6 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/
+
+# Local model weights (downloaded, never committed)
+models/

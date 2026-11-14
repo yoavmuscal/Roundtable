@@ -22,14 +22,15 @@ export function RoomMap() {
   const level = useRoundtableStore((state) => state.level);
 
   const baseCells = useMemo(() => generateHexGrid(tableSize), [tableSize]);
-  const fallbackPositions = [
-    { id: 'p1', x: 0.42, y: -0.45 },
-    { id: 'p2', x: 0.9, y: -0.45 },
-    { id: 'p3', x: 1.5, y: -0.45 },
-  ];
+  const fallbackPositions = people.map((person, index) => ({
+    id: person.id,
+    x: (tableSize.width * (index + 1)) / (people.length + 1),
+    y: -0.45,
+  }));
   const markerPositions = frames.length
     ? frames.map((frame) => ({ id: frame.id, ...frame.mapPosition }))
     : fallbackPositions;
+  if (!markerPositions.length) markerPositions.push({ id: 'p1', x: tableSize.width / 2, y: -0.45 });
 
   const tableTopLeft = worldToMap({ x: 0, y: 0 }, tableSize, MAP);
   const tableBottomRight = worldToMap({ x: tableSize.width, y: tableSize.height }, tableSize, MAP);

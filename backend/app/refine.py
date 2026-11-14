@@ -43,15 +43,25 @@ class SpeakerKitAdapter:
         self.command = command
 
     async def diarize(self, wav_path: Path, speaker_count: int) -> list[SpeakerSegment]:
+        # argmax-cli / whisperkit-cli write RTTM to a file; a {rttm} placeholder in the
+        # command points there and the file is parsed after the process exits.
+        rttm_path = wav_path.with_suffix(".rttm")
+        command = [
+            part.format(wav=str(wav_path), speakers=speaker_count, rttm=str(rttm_path))
+            for part in self.command
+        ]
         process = await asyncio.create_subprocess_exec(
-            *[part.format(wav=str(wav_path), speakers=speaker_count) for part in self.command],
+            *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate()
         if process.returncode != 0:
-            raise RuntimeError(f"SpeakerKit failed: {stderr.decode('utf-8', errors='replace')}")
-        return parse_speakerkit_output(stdout.decode("utf-8", errors="replace"))
+            raise RuntimeError(f"SpeakerKit failed: {stderr.decode('utf-8', errors='replace')[-800:]}")
+        output = stdout.decode("utf-8", errors="replace")
+        if "{rttm}" in " ".join(self.command) and rttm_path.exists():
+            output = rttm_path.read_text(encoding="utf-8") + "\n" + output
+        return parse_speakerkit_output(output)
 
 
 def parse_speakerkit_output(output: str) -> list[SpeakerSegment]:
@@ -72,7 +82,14 @@ def parse_speakerkit_output(output: str) -> list[SpeakerSegment]:
     except (json.JSONDecodeError, TypeError, KeyError, ValueError):
         pass
     line_re = re.compile(r"^(?P<start>\d+(?:\.\d+)?)[\s,]+(?P<end>\d+(?:\.\d+)?)[\s,]+(?P<speaker>[\w-]+)\s*$")
+    # RTTM: SPEAKER <file> 1 <start> <duration> <NA> <NA> <speaker> <NA> <NA>
+    rttm_re = re.compile(r"^SPEAKER\s+\S+\s+\S+\s+(?P<start>\d+(?:\.\d+)?)\s+(?P<duration>\d+(?:\.\d+)?)\s+\S+\s+\S+\s+(?P<speaker>\S+)")
     for line in output.splitlines():
+        rttm = rttm_re.match(line.strip())
+        if rttm:
+            start = float(rttm.group("start"))
+            segments.append(SpeakerSegment(start, start + float(rttm.group("duration")), rttm.group("speaker")))
+            continue
         try:
             item = json.loads(line)
             segments.append(
@@ -137,6 +154,17 @@ def match_clusters_to_people(
     return mapping
 
 
+def merge_adjacent_segments(segments: list[SpeakerSegment], max_gap_s: float = 0.5) -> list[SpeakerSegment]:
+    """SpeakerKit splits one speaker's sentence at short pauses; rejoin same-cluster runs."""
+    merged: list[SpeakerSegment] = []
+    for segment in sorted(segments, key=lambda item: item.start):
+        if merged and merged[-1].cluster == segment.cluster and segment.start - merged[-1].end <= max_gap_s:
+            merged[-1] = SpeakerSegment(merged[-1].start, max(merged[-1].end, segment.end), segment.cluster)
+        else:
+            merged.append(segment)
+    return merged
+
+
 def refine_turns(
     live_turns: list[Turn],
     segments: list[SpeakerSegment],
@@ -145,6 +173,7 @@ def refine_turns(
     refined: list[Turn] = []
     changed = 0
     sequence = 1
+    segments = merge_adjacent_segments(segments)
     for turn in live_turns:
         runs = _speaker_runs_for_turn(turn, segments, cluster_to_person)
         if not runs:

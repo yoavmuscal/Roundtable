@@ -13,7 +13,16 @@ from .contract import turn_id
 from .models import Turn
 
 ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-NOISE_RE = re.compile(r"^(listening|loading|model|device|whisper|speakers?)\b", re.IGNORECASE)
+NOISE_RE = re.compile(
+    r"^(listening|loading|model|device|whisper|speakers?|transcribing audio|waiting for speech|task:|initializing|\[argmax-cli\])",
+    re.IGNORECASE,
+)
+# Whisper control tokens such as <|startoftranscript|>, <|en|>, <|7.44|>.
+SPECIAL_TOKEN_RE = re.compile(r"<\|[^|>]*\|>")
+# Non-speech annotations Whisper emits: [BLANK_AUDIO], [ Inaudible Remark ], (music), *coughs*.
+NON_SPEECH_RE = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")
+# argmax-cli --stream prints blocks separated by '---' with these labelled lines.
+BLOCK_LINE_RE = re.compile(r"^(Confirmed segment|Unconfirmed segment|Current text):\s?(.*)$")
 CONFIRMED_RE = re.compile(r"^(?:final|confirmed|stable)\s*[:\]]\s*", re.IGNORECASE)
 
 
@@ -33,12 +42,81 @@ class StreamingTranscriptParser:
         self.committed_words: list[str] = []
         self.partial_words: tuple[str, ...] = ()
         self.last_update: float | None = None
+        self.block_mode = False
+        self._buffer = ""
 
     def feed_chunk(self, chunk: bytes | str, time_s: float) -> list[TranscriptCommit]:
         text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
+        if self.block_mode or "Current text:" in text or "segment:" in text:
+            # argmax-cli (whisperkit-cli) --stream format: explicit confirmed segments.
+            if not self.block_mode:
+                # WhisperKit confirms segments itself, even through silence, so the
+                # partial-word flush is only a fallback and waits longer to avoid
+                # committing a hypothesis that the next window rewrites.
+                self.silence_flush_s = max(self.silence_flush_s, 2.0)
+            self.block_mode = True
+            self._buffer += ANSI_RE.sub("", text).replace("\r", "\n")
+            return self._drain_blocks(time_s)
         commits: list[TranscriptCommit] = []
         for line in re.split(r"[\r\n]+", text):
             commits.extend(self.feed_snapshot(line, time_s))
+        return commits
+
+    def _drain_blocks(self, time_s: float) -> list[TranscriptCommit]:
+        parts = self._buffer.split("---\n")
+        complete = parts[:-1]
+        tail = parts[-1]
+        # A block is also complete once its 'Current text' line has ended.
+        if re.search(r"^Current text:.*\n", tail, flags=re.MULTILINE):
+            complete.append(tail)
+            tail = ""
+        self._buffer = tail
+        commits: list[TranscriptCommit] = []
+        for block in complete:
+            commits.extend(self.feed_block(block, time_s))
+        return commits
+
+    def feed_block(self, block: str, time_s: float) -> list[TranscriptCommit]:
+        """Parse one argmax-cli stream block; confirmed segments commit immediately."""
+        confirmed: list[str] = []
+        unconfirmed: list[str] = []
+        current = ""
+        seen = False
+        for raw_line in block.splitlines():
+            match = BLOCK_LINE_RE.match(raw_line.strip())
+            if not match:
+                continue
+            seen = True
+            label, value = match.groups()
+            text = clean_whisper_text(value)
+            if label == "Confirmed segment":
+                confirmed.append(text)
+            elif label == "Unconfirmed segment":
+                unconfirmed.append(text)
+            else:
+                current = text
+        if not seen:
+            return []
+        confirmed_words = tuple(" ".join(confirmed).split())
+        pending = " ".join(unconfirmed) if any(unconfirmed) else current
+        commits: list[TranscriptCommit] = []
+        total_confirmed = self._align_reprint(confirmed_words) if confirmed_words else tuple(self.committed_words)
+        new_words = tuple(total_confirmed[len(self.committed_words):])
+        if new_words:
+            self.committed_words.extend(new_words)
+            commits.append(TranscriptCommit(new_words, time_s, explicit=True))
+        partial = tuple(pending.split())
+        # Drop words of the hypothesis that the confirmed text already covers.
+        overlap = min(len(partial), len(self.committed_words))
+        while overlap and tuple(self.committed_words[-overlap:]) != partial[:overlap]:
+            overlap -= 1
+        partial = partial[overlap:]
+        if partial != self.partial_words or new_words:
+            # Only real changes count as activity, so repeated identical blocks during
+            # silence let the 0.8 s flush fire.
+            self.last_update = time_s
+        self.partial_words = partial
+        self.previous_words = tuple(self.committed_words) + partial
         return commits
 
     def feed_snapshot(self, line: str, time_s: float) -> list[TranscriptCommit]:
@@ -185,6 +263,20 @@ class ArgmaxTranscriberAdapter:
             except asyncio.TimeoutError:
                 self.process.kill()
                 await self.process.wait()
+
+
+def clean_whisper_text(text: str) -> str:
+    """Strip Whisper control tokens, non-speech tags and '>>' turn markers."""
+    clean = SPECIAL_TOKEN_RE.sub(" ", text)
+    clean = NON_SPEECH_RE.sub(" ", clean)
+    # A tag still being decoded, e.g. "[ Inaudible Rem", has no closing bracket yet.
+    clean = re.sub(r"[\[(*][^\])*]*$", " ", clean)
+    clean = clean.replace(">>", " ")
+    clean = re.sub(r"\s+", " ", clean).strip()
+    # Status text the CLI prints in the 'Current text' slot before any speech.
+    if clean.lower().rstrip(".…") in {"waiting for speech", "listening"}:
+        return ""
+    return clean
 
 
 def _clean_line(line: str) -> str:

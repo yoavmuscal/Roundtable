@@ -84,3 +84,43 @@ def test_cluster_matching_by_enrollment_then_refine_and_split() -> None:
     assert result.turns[1].speaker_id == "p2"
     assert result.turns[0].text.split() == ["one", "two"]
     assert result.turns[1].text.split() == ["three", "four"]
+
+
+def test_same_speaker_pause_does_not_split_a_turn() -> None:
+    from backend.app.models import Turn
+    from backend.app.refine import SpeakerSegment, refine_turns
+
+    # Real SpeakerKit output for one sentence: two 'B' segments with a 0.1 s pause.
+    segments = [SpeakerSegment(10.07, 10.71, "B"), SpeakerSegment(10.81, 14.09, "B")]
+    turn = Turn("turn_0001", "p2", "Okay, Yoav, can you take the action item?", 10.07, 14.09, 0.4)
+    result = refine_turns([turn], segments, {"B": "p1"})
+    assert len(result.turns) == 1
+    assert result.turns[0].speaker_id == "p1"
+    assert result.changed_count == 1
+
+
+def test_bonsai_schema_echo_is_unwrapped() -> None:
+    from backend.app.bonsai import ANSWER_SCHEMA, _unwrap_schema_echo
+
+    echoed = {"type": "object", "required": ["text", "citedTurnIds"], "properties": {"text": "Yes.", "citedTurnIds": ["turn_0001"]}}
+    assert _unwrap_schema_echo(echoed, ANSWER_SCHEMA) == {"text": "Yes.", "citedTurnIds": ["turn_0001"]}
+
+
+def test_enrollment_windows_move_onto_the_session_clock() -> None:
+    import time
+
+    from backend.app.session import SessionEngine
+
+    engine = SessionEngine()
+    began = engine.clock()
+    engine.begin_enrollment(began)
+    time.sleep(0.02)
+    ended = engine.clock()
+    engine.record_enrollment("p1", ended)
+    before = engine.started_monotonic
+    time.sleep(0.05)
+    engine.start()
+    (start, end), = engine.enrollment_intervals["p1"]
+    shift = before - engine.started_monotonic
+    assert abs(start - (began + shift)) < 1e-6 and abs(end - (ended + shift)) < 1e-6
+    assert start < end < 0  # enrollment happened before the session clock started

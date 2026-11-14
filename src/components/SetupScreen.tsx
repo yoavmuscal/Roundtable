@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Point } from '../contract';
 import {
   applyHomography,
@@ -7,6 +7,7 @@ import {
   tableGridLines,
   validateCalibration,
 } from '../lib/geometry';
+import { defaultSeats } from '../lib/people';
 import { ShapeGlyph } from '../lib/shape';
 import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
@@ -40,11 +41,18 @@ export function SetupScreen() {
   const [corners, setCorners] = useState<Point[]>(DEMO_CORNERS);
   const [center, setCenter] = useState<Point>({ x: 0.5, y: 0.84 });
   const [clickingCenter, setClickingCenter] = useState(false);
-  const [seats, setSeats] = useState<Record<string, Point>>({
-    p1: { x: 0.3, y: -0.45 },
-    p2: { x: 0.9, y: -0.45 },
-    p3: { x: 1.5, y: -0.45 },
-  });
+  const [seats, setSeats] = useState<Record<string, Point>>(() => defaultSeats(people));
+  // Seats follow the enrolled people: new people get a default seat, removed people lose theirs.
+  useEffect(() => {
+    setSeats((current) => {
+      const defaults = defaultSeats(people);
+      const next: Record<string, Point> = {};
+      people.forEach((person) => {
+        next[person.id] = current[person.id] ?? defaults[person.id];
+      });
+      return next;
+    });
+  }, [people]);
   const [draggingSeat, setDraggingSeat] = useState<string>();
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -124,7 +132,10 @@ export function SetupScreen() {
           <button type="button" className="primary" onClick={runChecks} disabled={corners.length !== 4 || Boolean(validationError)}>
             Run visual checks
           </button>
-          <button type="button" className="primary" onClick={() => setPhase('enroll')} disabled={Boolean(validationError)}>
+          <button type="button" className="primary" onClick={() => {
+              roundtableClient.control('confirm-seats', JSON.stringify(people));
+              setPhase('enroll');
+            }} disabled={Boolean(validationError)}>
             Continue to enrollment
           </button>
         </div>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import os
 import random
 import re
 import urllib.error
@@ -34,9 +35,38 @@ class BonsaiClient(Protocol):
 class RealBonsaiClient:
     """OpenAI-compatible localhost client for the Mac's Bonsai server."""
 
-    def __init__(self, base_url: str = "http://localhost:8080", model: str = "bonsai-2-2b") -> None:
+    def __init__(self, base_url: str = "http://localhost:8080", model: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
-        self.model = model
+        self.model = model or os.environ.get("ROUNDTABLE_BONSAI_MODEL") or None
+
+    def resolve_model(self) -> str:
+        """Use the model id the local server actually has loaded (mlx-vlm or llama.cpp)."""
+        if self.model:
+            return self.model
+        try:
+            with urllib.request.urlopen(f"{self.base_url}/v1/models", timeout=3) as response:
+                models = json.loads(response.read().decode("utf-8")).get("data", [])
+        except (OSError, ValueError):
+            models = []
+        loaded = [item for item in models if item.get("loaded", True)]
+        bonsai = [item for item in loaded if "bonsai" in str(item.get("id", "")).lower()]
+        chosen = (bonsai or loaded or [{"id": "bonsai-2-2b"}])[0]
+        self.model = str(chosen["id"])
+        return self.model
+
+    def available(self) -> bool:
+        try:
+            with urllib.request.urlopen(f"{self.base_url}/v1/models", timeout=2):
+                return True
+        except OSError:
+            return False
+
+    async def warm_up(self) -> None:
+        """One tiny request so the first real job does not pay the graph-compile cost."""
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._chat, 'Reply with {"ok": true}', False), 30)
+        except Exception:
+            pass
 
     async def generate_json(
         self,
@@ -55,7 +85,7 @@ class RealBonsaiClient:
             prompt = _prompt_for(task, payload, schema, retry_error=str(last_error) if last_error else None)
             try:
                 text = self._chat(prompt, use_response_format=attempt == 0)
-                value = extract_json_value(text)
+                value = _unwrap_schema_echo(extract_json_value(text), schema)
                 validate_json_schema(value, schema)
                 if not isinstance(value, dict):
                     raise JsonSchemaError("top-level JSON value must be an object")
@@ -66,12 +96,17 @@ class RealBonsaiClient:
 
     def _chat(self, prompt: str, use_response_format: bool) -> str:
         request_body: dict[str, Any] = {
-            "model": self.model,
+            "model": self.resolve_model(),
             "messages": [
-                {"role": "system", "content": "Return only valid JSON. Thinking mode is off."},
+                {"role": "system", "content": "You are Roundtable's meeting assistant. Answer with a single JSON object and nothing else. /no_think"},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0,
+            # Non-thinking sampling from the Bonsai 2 model card; thinking is disabled through
+            # the chat template so the live path never pays for a reasoning trace.
+            "temperature": 0.2,
+            "top_p": 0.8,
+            "max_tokens": 512,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         if use_response_format:
             request_body["response_format"] = {"type": "json_object"}
@@ -292,14 +327,80 @@ def validate_json_schema(value: Any, schema: dict[str, Any], path: str = "$") ->
             validate_json_schema(item, schema["items"], f"{path}[{index}]")
 
 
+TASK_INSTRUCTIONS = {
+    "ask": (
+        "Answer the question in one sentence using only the meeting turns below. Put the ids of the turns that contain the answer in citedTurnIds. If the turns do not answer it, say so and cite nothing.",
+        {"text": "<one-sentence answer>", "citedTurnIds": ["turn_00NN"]},
+    ),
+    "tag": (
+        "Tag this meeting turn. Allowed tags: question, decision, action item, answer. "
+        "repliesTo is the id of an earlier turn it answers or null; actionOwner is a person id or null.",
+        {"tags": ["<zero or more of: question, decision, action item, answer>"], "repliesTo": None, "actionOwner": None},
+    ),
+    "summary": (
+        "Summarize these meeting turns in two sentences, list up to four short topics, every action item "
+        "with its owner, and one sentence for each speaker id that appears. Use only facts from the turns.",
+        {
+            "summary": "<two sentences>",
+            "topics": ["<topic>"],
+            "actionItems": ["<owner> <does what>"],
+            "perPerson": [{"personId": "p1", "summary": "<one sentence>"}],
+        },
+    ),
+    "name": (
+        "Extract the name the speaker introduced themselves with, plus any nicknames.",
+        {"name": "<name>", "aliases": []},
+    ),
+    "layout": ("Describe where people sit in one sentence.", {"summary": "<one sentence>"}),
+}
+
+
+def _render_turns(turns: list[dict[str, Any]], names: dict[str, str]) -> str:
+    lines = []
+    for turn in turns:
+        speaker = str(turn.get("speakerId") or "unknown")
+        label = f"{names.get(speaker, speaker)} ({speaker})" if speaker in names else speaker
+        lines.append(f"[{turn.get('id')}] {label}: {turn.get('text', '')}")
+    return "\n".join(lines)
+
+
 def _prompt_for(task: str, payload: dict[str, Any], schema: dict[str, Any], retry_error: str | None) -> str:
-    retry = f"\nThe previous answer failed validation: {retry_error}. Correct it." if retry_error else ""
-    return (
-        f"Task: {task}\n"
-        f"Input JSON:\n{json.dumps(payload, ensure_ascii=False)}\n"
-        f"Return a JSON object matching this schema:\n{json.dumps(schema, ensure_ascii=False)}"
-        f"{retry}"
+    """Small models copy a JSON schema back verbatim, so prompts show a placeholder shape instead.
+
+    Turns are rendered as a plain transcript and the question goes last, which a 2B model
+    follows far better than a JSON blob.
+    """
+    instruction, example = TASK_INSTRUCTIONS.get(task, (f"Complete the task '{task}'.", None))
+    required = ", ".join(schema.get("required", []))
+    retry = f"\nYour previous answer was invalid ({retry_error}). Fix it." if retry_error else ""
+    shape = (
+        f"Reply with one JSON object in exactly this shape, replacing every <placeholder> with real content:\n{json.dumps(example)}"
+        if example is not None
+        else f"Reply with one JSON object with the keys: {required}."
     )
+    rest = {key: value for key, value in payload.items() if key not in {"turns", "names", "question"}}
+    parts = [instruction]
+    if payload.get("turns"):
+        parts.append("Meeting transcript:\n" + _render_turns(list(payload["turns"]), dict(payload.get("names", {}))))
+    if rest:
+        parts.append("Input:\n" + json.dumps(rest, ensure_ascii=False))
+    parts.append(f"{shape}\nKeys required: {required}.{retry}")
+    if payload.get("question"):
+        parts.append(f"Question: {payload['question']}")
+    return "\n\n".join(parts)
+
+
+def _unwrap_schema_echo(value: Any, schema: dict[str, Any]) -> Any:
+    """Recover when a model wraps its answer in the schema ({"type":..., "properties": {...}})."""
+    if not isinstance(value, dict):
+        return value
+    required = schema.get("required", [])
+    if all(key in value for key in required):
+        return value
+    inner = value.get("properties")
+    if isinstance(inner, dict) and all(key in inner for key in required):
+        return inner
+    return value
 
 
 NAME_SCHEMA = {

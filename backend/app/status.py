@@ -32,6 +32,8 @@ def memory_status() -> dict[str, float | None]:
         total = float(status.total_physical) / 1e9
         available = float(status.available_physical) / 1e9
         return {"ramGb": round(total - available, 2), "ramTotalGb": round(total, 2)}
+    if platform.system() == "Darwin":
+        return _macos_memory()
     try:
         pages = os.sysconf("SC_PHYS_PAGES")
         available_pages = os.sysconf("SC_AVPHYS_PAGES")
@@ -61,3 +63,24 @@ def status_message(
         "network": network_state,
         "health": health,
     }
+
+
+def _macos_memory() -> dict[str, float | None]:
+    """Activity Monitor's 'Memory Used' = app (active) + wired + compressed pages."""
+    import re
+    import subprocess
+
+    try:
+        total = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=2).stdout.strip())
+        output = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=2).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {"ramGb": None, "ramTotalGb": None}
+    page_match = re.search(r"page size of (\d+) bytes", output)
+    page_size = int(page_match.group(1)) if page_match else 16384
+
+    def pages(label: str) -> int:
+        match = re.search(rf"{label}:\s+(\d+)", output)
+        return int(match.group(1)) if match else 0
+
+    used = (pages("Pages active") + pages("Pages wired down") + pages("Pages occupied by compressor")) * page_size
+    return {"ramGb": round(used / 1e9, 2), "ramTotalGb": round(total / 1e9, 2)}

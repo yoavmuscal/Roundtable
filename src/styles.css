@@ -440,6 +440,7 @@ kbd {
 .network-line { display: flex; align-items: center; gap: 0.35rem; margin-top: 3px !important; color: var(--ok) !important; }
 .network-line span { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px rgba(45, 212, 167, 0.9); }
 .on-device.warn .network-line { color: var(--amber) !important; }
+.device-lines p.device-warn { color: var(--amber); }
 .on-device.warn .network-line span { background: var(--amber); box-shadow: 0 0 8px rgba(245, 165, 36, 0.9); }
 
 /* ---------- Setup and enrollment ---------- */
@@ -472,8 +473,13 @@ h1 { margin-bottom: 1rem; font-size: clamp(1.8rem, 3.4vw, 2.9rem); line-height: 
 .seat-marker text { fill: var(--text); font-size: 15px; font-weight: 700; paint-order: stroke; stroke: #10141b; stroke-width: 4px; }
 .enroll-screen { grid-template-columns: minmax(340px, 0.8fr) minmax(480px, 1.2fr); }
 .enroll-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 18px; align-content: start; }
-.enroll-card { border: 1px solid; border-radius: var(--radius-sm); padding: 1rem; background: var(--panel-2); }
+.enroll-card { border: 1px solid; border-radius: var(--radius-sm); padding: 1rem; background: var(--panel-2); transition: box-shadow 150ms ease; }
+.enroll-card.current { box-shadow: 0 0 0 3px rgba(45, 212, 167, 0.35); }
 .person-heading, .history-meta { display: flex; align-items: center; gap: 0.45rem; }
+.person-heading .remove-person { margin-left: auto; width: 28px; height: 28px; padding: 0; border-radius: 50%; color: var(--text-muted); font-size: 1rem; line-height: 1; }
+.person-heading .remove-person:hover:not(:disabled) { color: #ff8787; border-color: rgba(240, 106, 106, 0.6); }
+.people-count { color: var(--text-muted); font-size: 0.78rem; }
+.enroll-cards { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .enroll-card label { display: grid; gap: 0.35rem; margin-top: 1rem; color: var(--text-soft); font-size: 0.78rem; font-weight: 600; }
 .enroll-card small { color: var(--text-muted); font-weight: 400; }
 .voice-meter { overflow: hidden; height: 6px; margin-top: 1rem; border-radius: 3px; background: var(--border); }

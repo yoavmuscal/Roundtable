@@ -50,6 +50,8 @@ class MicrophoneLevelMonitor:
     async def start(self) -> None:
         self.loop = asyncio.get_running_loop()
         self.started_monotonic = self.loop.time()
+        # time.monotonic() matches asyncio's loop clock on macOS/Linux; kept for WAV alignment.
+        self.started_wall_monotonic = __import__('time').monotonic()
         try:
             import sounddevice as sd
         except ImportError as exc:

@@ -13,7 +13,7 @@ export function TalkTimeRings() {
       <div className="card-heading plain-heading">
         <strong>Talk time</strong>
       </div>
-      <div className="individual-rings">
+      <div className="individual-rings" style={{ gridTemplateColumns: `repeat(${Math.max(1, people.length)}, 1fr)` }}>
         {people.map((person) => {
           const share = shares.find((item) => item.personId === person.id)?.share ?? 0;
           return (

@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import shlex
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from .contract import CONTRACT_VERSION, MessageValidationError, validate_browser
 from .export import export_session_ass, ffmpeg_export_command
 from .fake_session import generate_session
 from .geometry import Point
-from .refine import SpeakerKitAdapter, match_clusters_to_people, refine_turns
+from .refine import SpeakerKitAdapter, SpeakerSegment, match_clusters_to_people, refine_turns
 from .replay import create_app as create_replay_app
 from .session import SessionEngine
 from .simulation import create_simulation_engine, run_simulation
@@ -31,6 +32,36 @@ from .ui_adapter import browser_to_internal, internal_to_ui
 
 
 DIST_DIR = Path(__file__).resolve().parents[2] / "dist"
+WHISPER_MODEL = os.environ.get("ROUNDTABLE_WHISPER_MODEL", "base")
+
+
+def argmax_binary() -> str | None:
+    """The Argmax open-source CLI ships as argmax-cli (newer) or whisperkit-cli (Homebrew)."""
+    for name in ("argmax-cli", "whisperkit-cli"):
+        if shutil.which(name):
+            return name
+    return None
+
+
+def transcriber_command() -> list[str]:
+    configured = os.environ.get("ROUNDTABLE_ARGMAX_COMMAND", "")
+    if configured:
+        return shlex.split(configured)
+    binary = argmax_binary()
+    if not binary:
+        return []
+    # Without --word-timestamps, argmax-cli 1.1.1 streams only "No word timings found".
+    return [binary, "transcribe", "--stream", "--word-timestamps", "--model", WHISPER_MODEL]
+
+
+def speakerkit_command() -> list[str]:
+    configured = os.environ.get("ROUNDTABLE_SPEAKERKIT_COMMAND", "")
+    if configured:
+        return shlex.split(configured)
+    binary = argmax_binary()
+    if not binary:
+        return []
+    return [binary, "diarize", "--audio-path", "{wav}", "--num-speakers", "{speakers}", "--rttm-path", "{rttm}"]
 
 
 def mount_ui(app: FastAPI) -> FastAPI:
@@ -95,7 +126,27 @@ def create_app(
     app.state.engine = SessionEngine(session_dir=session_dir, bonsai=app.state.bonsai)
     app.state.sim_task = None
     app.state.transcriber_task = None
+    app.state.tick_task = None
     app.state.audio_monitor = None
+    app.state.warmed = False
+
+    def model_label() -> str:
+        if mode == "sim":
+            return "Bonsai 2 2B (mock)"
+        return "Bonsai 2 2B" if isinstance(bonsai_client, RealBonsaiClient) and bonsai_client.available() else "Bonsai offline"
+
+    def current_status(**extra: Any) -> dict[str, Any]:
+        durations = [turn.end - turn.start for turn in engine().turns]
+        seconds_per_turn = sum(durations) / len(durations) if durations else None
+        payload = status_message(model=model_label(), seconds_per_turn=seconds_per_turn)
+        payload["backend"] = "live" if mode == "live" else "simulation"
+        payload["transcriber"] = " ".join(transcriber_command()[:1]) or None
+        return {**payload, **extra}
+
+    async def warm_bonsai() -> None:
+        if mode == "live" and not app.state.warmed and isinstance(bonsai_client, RealBonsaiClient):
+            app.state.warmed = True
+            await bonsai_client.warm_up()
 
     async def broadcast(message: dict[str, Any]) -> None:
         external = internal_to_ui(message)
@@ -106,15 +157,31 @@ def create_app(
         return app.state.engine
 
     async def stream_transcriber() -> None:
-        command_text = os.environ.get("ROUNDTABLE_ARGMAX_COMMAND", "")
-        if mode != "live" or not command_text:
+        command = transcriber_command()
+        if mode != "live":
             return
-        adapter = ArgmaxTranscriberAdapter(shlex.split(command_text))
+        if not command:
+            await broadcast(
+                SessionEngine._message(
+                    engine().clock(),
+                    "error",
+                    code="transcriber",
+                    message="No Argmax CLI found (brew install whisperkit-cli) and ROUNDTABLE_ARGMAX_COMMAND is unset; captions are off.",
+                )
+            )
+            return
+        adapter = ArgmaxTranscriberAdapter(command)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        # Raw CLI bytes are kept per session for debugging and as parser fixtures.
+        raw_log = (session_dir / "transcriber_raw.txt").open("wb")
         try:
             async for _, chunk in adapter.stream():
+                raw_log.write(chunk)
+                raw_log.flush()
                 for message in engine().handle_transcript_chunk(chunk, engine().clock()):
                     await broadcast(message)
         finally:
+            raw_log.close()
             await adapter.stop()
 
     async def refine_after_stop() -> None:
@@ -123,13 +190,15 @@ def create_app(
         refined_turns = current.turns
         changed_count = 0
         cluster_mapping: dict[str, str] = {}
-        command_text = os.environ.get("ROUNDTABLE_SPEAKERKIT_COMMAND", "")
+        command = speakerkit_command() if mode == "live" else []
         wav_path = session_dir / "audio.wav"
-        if command_text and wav_path.exists():
+        if command and wav_path.exists():
             try:
-                segments = await SpeakerKitAdapter(shlex.split(command_text)).diarize(
-                    wav_path, speaker_count=max(1, current.tracker.expected_people)
+                segments = await SpeakerKitAdapter(command).diarize(
+                    wav_path, speaker_count=max(1, len(current.people))
                 )
+                offset = float(current.recording_offsets.get("audioS", 0.0))
+                segments = [SpeakerSegment(seg.start - offset, seg.end - offset, seg.cluster) for seg in segments]
                 cluster_mapping = match_clusters_to_people(
                     segments,
                     getattr(current, "enrollment_intervals", {}),
@@ -143,7 +212,11 @@ def create_app(
         await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="tags", progress=0.55))
         refined_turns = await current.tag_turns(refined_turns)
         await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="summary", progress=0.7))
-        summary = await current.summarize()
+        try:
+            summary = await current.summarize()
+        except Exception as exc:
+            await broadcast(SessionEngine._message(current.clock(), "error", code="summary", message=f"Bonsai summary failed: {exc}"))
+            summary = {"summary": "Summary unavailable: Bonsai did not respond.", "topics": [], "actionItems": [], "perPerson": []}
         current.recorder.write_turns("refined_transcript.jsonl", refined_turns)
         current.phase = "review"
         await broadcast(
@@ -167,12 +240,7 @@ def create_app(
 
     @app.get("/status")
     async def status() -> dict[str, Any]:
-        durations = [turn.end - turn.start for turn in engine().turns]
-        seconds_per_turn = sum(durations) / len(durations) if durations else None
-        return status_message(
-            model="mock-bonsai" if mode == "sim" else "bonsai-2-2b",
-            seconds_per_turn=seconds_per_turn,
-        )
+        return current_status()
 
     @app.get("/transcript")
     async def transcript() -> dict[str, Any]:
@@ -224,6 +292,7 @@ def create_app(
                 message_type = message["type"]
                 current = engine()
                 if message_type == "hello":
+                    asyncio.create_task(warm_bonsai())
                     for outgoing in (
                         {"type": "phase", "time": current.clock(), "phase": current.phase},
                         {"type": "people", "time": current.clock(), "people": current.people},
@@ -261,7 +330,18 @@ def create_app(
                     for outgoing in current.handle_faces(time_s, message.get("people", [])):
                         await broadcast(outgoing)
                 elif message_type == "ask":
-                    await broadcast(await current.ask(str(message.get("text", ""))))
+                    question = str(message.get("text", ""))
+                    try:
+                        answer = await current.ask(question)
+                    except Exception as exc:  # Bonsai offline, timeout or invalid JSON
+                        answer = SessionEngine._message(
+                            current.clock(),
+                            "answer",
+                            question=question,
+                            text=f"Bonsai could not answer ({type(exc).__name__}). Is the Bonsai server running on :8080?",
+                            citedTurnIds=[],
+                        )
+                    await broadcast(answer)
                 elif message_type == "seat_drag":
                     person_id = str(message.get("personId"))
                     position = message.get("position", {})
@@ -269,6 +349,12 @@ def create_app(
                     if track:
                         track.seat_position = Point(float(position.get("x", 0)), float(position.get("y", 0)))
                 elif message_type == "control":
+                    client = websocket.client
+                    print(
+                        f"roundtable: control {message['action']} from {client.host}:{client.port}"
+                        f" (phase {current.phase}, {len(manager.clients)} client(s) connected)",
+                        flush=True,
+                    )
                     await handle_control(message)
         except WebSocketDisconnect:
             pass
@@ -281,12 +367,42 @@ def create_app(
         finally:
             await manager.disconnect(websocket)
 
+    async def live_ticker() -> None:
+        """Close turns after silence and refresh RAM/model status while live."""
+        beats = 0
+        while True:
+            await asyncio.sleep(0.25)
+            current = engine()
+            if current.phase != "live":
+                continue
+            for message in current.tick(current.clock()):
+                await broadcast(message)
+            beats += 1
+            if beats % 20 == 0:
+                await broadcast(SessionEngine._message(current.clock(), "status", **current_status()))
+
+    async def stop_live_tasks(stop_audio: bool = True) -> None:
+        for name in ("transcriber_task", "tick_task"):
+            task = getattr(app.state, name)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            setattr(app.state, name, None)
+        if stop_audio and app.state.audio_monitor is not None:
+            await app.state.audio_monitor.stop()
+            app.state.audio_monitor = None
+
     async def ensure_live_audio() -> None:
         if mode != "live" or app.state.audio_monitor is not None:
             return
 
-        async def emit_level(time_s: float, rms: float, peak: float) -> None:
-            await broadcast(engine().handle_level(time_s, rms, peak))
+        async def emit_level(_wav_time: float, rms: float, peak: float) -> None:
+            # Levels are stamped on the session clock so they line up with faces and captions.
+            current = engine()
+            await broadcast(current.handle_level(current.clock(), rms, peak))
 
         monitor = MicrophoneLevelMonitor(emit_level, session_dir / "audio.wav")
         try:
@@ -323,63 +439,85 @@ def create_app(
 
                 app.state.sim_task = asyncio.create_task(run_and_refine())
             else:
+                fresh = current.phase in {"review", "refine", "live"}
+                # Keep the microphone (and its WAV) running from enrollment into the session so
+                # the enrollment samples are in the same file SpeakerKit diarizes.
+                await stop_live_tasks(stop_audio=fresh)
+                if fresh:
+                    previous = current
+                    current = SessionEngine(session_dir=session_dir, bonsai=app.state.bonsai)
+                    if previous.calibration is not None:
+                        current.set_calibration(previous.calibration)
+                    current.set_enrolled_people(previous.people)
+                    app.state.engine = current
                 if message.get("value"):
                     try:
                         people = json.loads(str(message["value"]))
-                        if isinstance(people, list):
+                        if isinstance(people, list) and people:
                             current.set_enrolled_people(people)
                     except (json.JSONDecodeError, TypeError, KeyError):
-                        await broadcast(
-                            SessionEngine._message(current.clock(), "error", code="people", message="Invalid enrolled people payload")
-                        )
+                        pass
+                await ensure_live_audio()
                 for outgoing in current.start():
                     await broadcast(outgoing)
-                await ensure_live_audio()
+                monitor = app.state.audio_monitor
+                if monitor is not None:
+                    current.recording_offsets["audioS"] = round(current.started_monotonic - monitor.started_wall_monotonic, 3)
                 app.state.transcriber_task = asyncio.create_task(stream_transcriber())
+                app.state.tick_task = asyncio.create_task(live_ticker())
         elif action == "stop":
             if app.state.sim_task and not app.state.sim_task.done():
                 app.state.sim_task.cancel()
                 app.state.sim_task = None
             if current.phase == "review":
                 return
-            if app.state.audio_monitor is not None:
-                await app.state.audio_monitor.stop()
-                app.state.audio_monitor = None
+            await stop_live_tasks()
             for outgoing in current.stop():
                 await broadcast(outgoing)
             asyncio.create_task(refine_after_stop())
-        elif action == "enroll_next":
-            current.complete_enrollment(current.clock(), record_interval=True)
-            outgoing = current.enroll_person(
-                str(message.get("name", f"Person {current.tracker.expected_people + 1}")),
-                list(message.get("aliases", [])),
-            )
-            await broadcast(outgoing)
-            await broadcast(
-                SessionEngine._message(
-                    current.clock(),
-                    "enroll_prompt",
-                    personId=f"p{min(current.tracker.expected_people + 1, 4)}",
-                    instruction="Say your name clearly.",
-                )
-            )
+        elif action in {"enroll_next", "enroll_skip", "enroll_redo"}:
+            if message.get("value"):
+                try:
+                    people = json.loads(str(message["value"]))
+                    if isinstance(people, list) and people:
+                        current.set_enrolled_people(people)
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    pass
+            cursor = min(getattr(app.state, "enroll_cursor", 0), len(current.people) - 1)
+            now = current.clock()
+            if action == "enroll_next":
+                current.record_enrollment(current.people[cursor]["id"], now)
+                cursor += 1
+            elif action == "enroll_skip":
+                current.begin_enrollment(now)
+                cursor += 1
+            else:
+                current.begin_enrollment(now)
+            app.state.enroll_cursor = min(cursor, len(current.people) - 1)
+            if cursor >= len(current.people):
+                await broadcast(SessionEngine._message(now, "status", enrollment="complete", **current_status()))
+            else:
+                await broadcast(current.enroll_prompt(app.state.enroll_cursor))
         elif action == "recalibrate":
             current.phase = "setup"
             await broadcast(SessionEngine._message(current.clock(), "phase", phase="setup"))
         elif action == "confirm_seats":
+            if message.get("value"):
+                try:
+                    people = json.loads(str(message["value"]))
+                    if isinstance(people, list) and people:
+                        current.set_enrolled_people(people)
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    pass
             current.phase = "enroll"
-            current.begin_enrollment(current.clock())
+            app.state.enroll_cursor = 0
+            current.enrollment_intervals = {}
             await ensure_live_audio()
-            await broadcast(SessionEngine._message(current.clock(), "phase", phase="enroll"))
-        elif action == "enroll_redo":
             current.begin_enrollment(current.clock())
-            await broadcast(SessionEngine._message(current.clock(), "status", action=action, **status_message(model="mock-bonsai" if mode == "sim" else "bonsai-2-2b", seconds_per_turn=None)))
-        elif action == "enroll_skip":
-            current.complete_enrollment(current.clock(), record_interval=False)
-            current.enroll_person(f"Person {current.tracker.expected_people + 1}")
-            await broadcast(SessionEngine._message(current.clock(), "status", action=action, **status_message(model="mock-bonsai" if mode == "sim" else "bonsai-2-2b", seconds_per_turn=None)))
+            await broadcast(SessionEngine._message(current.clock(), "phase", phase="enroll"))
+            await broadcast(current.enroll_prompt(0))
         elif action in {"ask_begin", "ask_end"}:
-            await broadcast(SessionEngine._message(current.clock(), "status", action=action, **status_message(model="mock-bonsai" if mode == "sim" else "bonsai-2-2b", seconds_per_turn=None)))
+            await broadcast(SessionEngine._message(current.clock(), "status", action=action, **current_status()))
 
     return mount_ui(app)
 

@@ -65,3 +65,50 @@ def test_turn_builder_splits_12_second_gap_and_speaker_change() -> None:
     assert final is not None
     assert final.speaker_id == "p2"
     assert final.id == "turn_0003"
+
+
+def test_argmax_block_format_commits_confirmed_segments_only() -> None:
+    sample = (Path(__file__).parent / "fixtures" / "argmax-stream-sample.txt").read_text()
+    parser = StreamingTranscriptParser()
+    commits = []
+    # Feed in small pieces to mimic raw pipe reads that split blocks anywhere.
+    for index in range(0, len(sample), 37):
+        commits.extend(parser.feed_chunk(sample[index:index + 37], index / 100))
+    words = [word for commit in commits for word in commit.words]
+    assert words == "Should we spend the credits on Kimi now? Use them now.".split()
+    assert all(commit.explicit for commit in commits)
+    assert parser.partial_words == ()
+
+
+def test_argmax_block_partials_and_silence_flush() -> None:
+    parser = StreamingTranscriptParser()
+    block = (
+        "---\nUnconfirmed segment: <|startoftranscript|><|en|><|transcribe|><|0.00|> >> Hello there<|1.0|>\n"
+        "Current text: \n"
+    )
+    assert parser.feed_chunk(block, 1.0) == []
+    assert parser.partial_words == ("Hello", "there")
+    # Identical blocks during silence do not count as activity, so the fallback flush
+    # fires; in block mode it waits 2 s because WhisperKit normally confirms first.
+    parser.feed_chunk(block, 1.5)
+    assert parser.flush_due(2.5) is None
+    commit = parser.flush_due(3.1)
+    assert commit is not None and commit.words == ("Hello", "there")
+    # When the CLI later confirms the same words they are not committed twice.
+    confirmed = "---\nConfirmed segment: <|0.00|> Hello there<|1.0|>\nCurrent text: \n"
+    assert parser.feed_chunk(confirmed, 3.5) == []
+    assert parser.committed_words == ["Hello", "there"]
+
+
+def test_clean_whisper_text_strips_tokens_and_non_speech() -> None:
+    from backend.app.transcribe import clean_whisper_text
+
+    assert clean_whisper_text("<|startoftranscript|><|en|><|0.00|> [BLANK_AUDIO]<|7.44|>") == ""
+    assert clean_whisper_text("<|7.44|> >> Okay, Yoav (laughs) let's go.<|9.0|>") == "Okay, Yoav let's go."
+
+
+def test_waiting_for_speech_is_not_a_caption() -> None:
+    parser = StreamingTranscriptParser()
+    parser.feed_chunk("Transcribing audio stream, press Ctrl+C to stop.\n---\nCurrent text: Waiting for speech...\n", 0.0)
+    assert parser.partial_words == ()
+    assert parser.flush(2.0) is None

@@ -164,7 +164,9 @@ export function VideoStage() {
           <strong>Ready for the room</strong>
           <span>
             {connected
-              ? 'Start the replay or a live session to pin captions to speakers.'
+              ? status.backend === 'live'
+                ? 'Calibrate and enroll first, or start now with the default speakers.'
+                : 'Start the replay or a live session to pin captions to speakers.'
               : 'Waiting for the local backend on :8000…'}
           </span>
           <button
@@ -177,7 +179,7 @@ export function VideoStage() {
               roundtableClient.control('start');
             }}
           >
-            Start replay <kbd>R</kbd>
+            {status.backend === 'live' ? 'Start live session' : 'Start replay'} <kbd>R</kbd>
           </button>
         </div>
       ) : null}

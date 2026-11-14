@@ -73,7 +73,8 @@ class SessionEngine:
     session_dir: Path | None = None
     bonsai: BonsaiWorker | None = None
     calibration: Calibration | None = None
-    people: list[dict[str, Any]] = field(default_factory=lambda: [dict(item) for item in SPEAKERS])
+    # Three default seats; the UI adds or removes people (1-4) and sends its list back.
+    people: list[dict[str, Any]] = field(default_factory=lambda: [dict(item) for item in SPEAKERS[:3]])
     thresholds: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -109,6 +110,24 @@ class SessionEngine:
     def begin_enrollment(self, time_s: float) -> None:
         self.enrollment_started_at = time_s
 
+    def record_enrollment(self, person_id: str, time_s: float) -> None:
+        """Store the voice sample window for one person (used to name SpeakerKit clusters)."""
+        if self.enrollment_started_at is not None and time_s > self.enrollment_started_at:
+            self.enrollment_intervals.setdefault(person_id, []).append((self.enrollment_started_at, time_s))
+        self.enrollment_started_at = time_s
+
+    def enroll_prompt(self, cursor: int) -> dict[str, Any]:
+        cursor = max(0, min(cursor, len(self.people) - 1))
+        person = self.people[cursor]
+        return self._message(
+            self.clock(),
+            "enroll_prompt",
+            personId=person["id"],
+            prompt=f"{person.get('name', person['id'])}, please say: \u201cRoundtable keeps this conversation private.\u201d",
+            index=cursor,
+            total=len(self.people),
+        )
+
     def complete_enrollment(self, time_s: float, record_interval: bool = True) -> None:
         person_id = f"p{min(self.tracker.expected_people + 1, 4)}"
         if record_interval and self.enrollment_started_at is not None and time_s > self.enrollment_started_at:
@@ -138,7 +157,17 @@ class SessionEngine:
 
     def start(self) -> list[dict[str, Any]]:
         self.phase = "live"
-        self.started_monotonic = time.monotonic()
+        new_origin = time.monotonic()
+        # Enrollment windows were timed on the pre-session clock; move them onto the
+        # session clock (they become negative) so they line up with the WAV offset.
+        shift = self.started_monotonic - new_origin
+        self.enrollment_intervals = {
+            person: [(start + shift, end + shift) for start, end in intervals]
+            for person, intervals in self.enrollment_intervals.items()
+        }
+        if self.enrollment_started_at is not None:
+            self.enrollment_started_at += shift
+        self.started_monotonic = new_origin
         messages = [
             self._message(0.0, "phase", phase="live"),
             self._message(0.0, "people", people=self.people),
@@ -227,8 +256,12 @@ class SessionEngine:
         return messages
 
     def handle_transcript_chunk(self, chunk: bytes | str, time_s: float) -> list[dict[str, Any]]:
+        before = self.transcript.partial_words
         commits = self.transcript.feed_chunk(chunk, time_s)
         messages = self._commits_to_messages(commits, time_s, None)
+        partial = self.transcript.partial_words
+        if partial and (partial != before or commits):
+            messages.append(self._live_partial_caption(time_s))
         for message in messages:
             self.recorder.record(message)
         return messages
@@ -259,6 +292,24 @@ class SessionEngine:
                 )
         return messages
 
+    def _live_partial_caption(self, time_s: float) -> dict[str, Any]:
+        """Show still-changing words immediately so the bubble appears while someone talks."""
+        start = self.turn_builder.current_start if self.turn_builder.current_start is not None else time_s
+        attribution = self.fusion.attribute(max(0.0, start - 0.2), time_s)
+        speaker = self.turn_builder.current_speaker or attribution.speaker_id
+        words = list(self.turn_builder.current_words) + list(self.transcript.partial_words)
+        return self._message(
+            time_s,
+            "caption",
+            turnId=turn_id(self.turn_builder.sequence + 1),
+            speakerId=speaker,
+            text=" ".join(words),
+            start=start,
+            end=time_s,
+            partial=True,
+            confidence=attribution.confidence,
+        )
+
     def flush_transcript(self, time_s: float) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
         commit_time = self.transcript.last_update if self.transcript.last_update is not None else time_s
@@ -276,6 +327,26 @@ class SessionEngine:
             self.recorder.record(message)
         return messages
 
+    def tick(self, time_s: float) -> list[dict[str, Any]]:
+        """Live-mode heartbeat: flush partial words after silence and close quiet turns."""
+        messages: list[dict[str, Any]] = []
+        commit_time = self.transcript.last_update if self.transcript.last_update is not None else time_s
+        commit = self.transcript.flush_due(time_s)
+        if commit:
+            start = self.turn_builder.current_start if self.turn_builder.current_start is not None else commit_time
+            attribution = self.fusion.attribute(start, commit_time)
+            completed = self.turn_builder.add_words(commit.words, commit_time, attribution.speaker_id, attribution.confidence)
+            if completed:
+                messages.extend(self._finalize_turn(completed))
+        last_word = self.turn_builder.last_word_time
+        if last_word is not None and time_s - last_word > self.turn_builder.gap_s and not self.transcript.partial_words:
+            completed = self.turn_builder.end_turn(last_word)
+            if completed:
+                messages.extend(self._finalize_turn(completed))
+        for message in messages:
+            self.recorder.record(message)
+        return messages
+
     def stats(self, time_s: float) -> dict[str, Any]:
         return self._message(
             time_s,
@@ -285,16 +356,21 @@ class SessionEngine:
         )
 
     async def ask(self, text: str, timeout_s: float = 8.0) -> dict[str, Any]:
+        if not self.turns:
+            # A small model invents a meeting when given none; answer honestly instead.
+            return self._message(self.clock(), "answer", question=text, text="Nothing has been said yet, so there is nothing to answer from.", citedTurnIds=[])
         if self.bonsai is None:
             cited = [turn.id for turn in self.turns[-2:]]
             return self._message(self.clock(), "answer", question=text, text="Bonsai is unavailable; showing the most recent relevant turns.", citedTurnIds=cited)
         result = await self.bonsai.submit(
             "ask",
-            {"question": text, "turns": [turn.as_dict() for turn in self.turns]},
+            {"question": text, "turns": [turn.as_dict() for turn in self.turns], "names": self._names()},
             ANSWER_SCHEMA,
             timeout_s,
         )
-        return self._message(self.clock(), "answer", question=text, text=result["text"], citedTurnIds=result["citedTurnIds"])
+        known = {turn.id for turn in self.turns}
+        cited = [turn_id for turn_id in result.get("citedTurnIds", []) if turn_id in known]
+        return self._message(self.clock(), "answer", question=text, text=result["text"], citedTurnIds=cited)
 
     async def tag_turns(self, turns: list[Turn], timeout_s: float = 4.0) -> list[Turn]:
         if self.bonsai is None:
@@ -316,11 +392,13 @@ class SessionEngine:
         return tagged
 
     async def summarize(self, timeout_s: float = 30.0) -> dict[str, Any]:
+        if not self.turns:
+            return {"summary": "No speech was captured in this session.", "topics": [], "actionItems": [], "perPerson": []}
         if self.bonsai is None:
             return {"summary": "Bonsai unavailable.", "topics": [], "actionItems": [], "perPerson": []}
         return await self.bonsai.submit(
             "summary",
-            {"turns": [turn.as_dict() for turn in self.turns]},
+            {"turns": [turn.as_dict() for turn in self.turns], "names": self._names()},
             SUMMARY_SCHEMA,
             timeout_s,
         )
@@ -350,6 +428,9 @@ class SessionEngine:
             }
         )
         return messages
+
+    def _names(self) -> dict[str, str]:
+        return {str(person["id"]): str(person.get("name", person["id"])) for person in self.people}
 
     def clock(self) -> float:
         return time.monotonic() - self.started_monotonic
