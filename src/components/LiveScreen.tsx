@@ -1,6 +1,7 @@
 import { useLayoutEffect } from 'react';
 import { AnswerCard } from './AnswerCard';
 import { CaptionHistory } from './CaptionHistory';
+import { LiveTranscript } from './LiveTranscript';
 import { OnDeviceCard } from './OnDeviceCard';
 import { QuestionsCard } from './QuestionsCard';
 import { RoomMap } from './RoomMap';
@@ -38,6 +39,7 @@ export function LiveScreen() {
       <div className="live-frame">
         <div className="live-canvas">
           <VideoStage />
+          <LiveTranscript />
           <SpeakerTimeline />
           <RoomMap />
           <TalkTimeRings />

@@ -17,7 +17,8 @@ export function OnDeviceCard() {
         <p className={bonsaiOffline ? 'device-warn' : undefined}>
           {status.model || 'Bonsai 2 2B'}{perTurn ? ` · ${perTurn.toFixed(1)} s/turn` : ''}
         </p>
-        <p>Argmax WhisperKit · SpeakerKit{status.backend === 'simulation' ? ' (replay)' : ''}</p>
+        <p>Argmax WhisperKit{status.backend === 'simulation' ? ' (replay)' : ''}</p>
+        <p>Argmax SpeakerKit</p>
         {status.backend === 'live' ? (
           <p className={status.transcriberState === 'listening' ? undefined : 'device-warn'}>
             Argmax: {status.transcriberState === 'listening' ? 'listening' : status.transcriberState === 'loading' ? 'loading model…' : 'off'}

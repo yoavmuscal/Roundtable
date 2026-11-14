@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { sentenceHeard } from '../lib/enrollment';
 import { MAX_PEOPLE, MIN_PEOPLE, addPerson, removePerson } from '../lib/people';
 import { ShapeGlyph } from '../lib/shape';
 import { roundtableClient } from '../services/roundtableClient';
@@ -36,6 +37,12 @@ export function EnrollScreen() {
       .sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
     return latest?.text;
   });
+  // People whose enrollment sentence Argmax recognised (kept after moving to the next person).
+  const [heardOk, setHeardOk] = useState<Record<string, boolean>>({});
+  const currentHeard = Boolean(enrollPrompt && currentId && sentenceHeard(enrollPrompt.prompt, heard));
+  useEffect(() => {
+    if (currentHeard && currentId) setHeardOk((current) => (current[currentId] ? current : { ...current, [currentId]: true }));
+  }, [currentHeard, currentId]);
   const setPhase = useRoundtableStore((state) => state.setPhase);
   const [aliases, setAliases] = useState<Record<string, string>>({});
 
@@ -92,6 +99,15 @@ export function EnrollScreen() {
                     ? `Heard: “${heard}”`
                     : 'Listening… speak now.'}
             </em>
+            {live && currentId && heardOk[currentId] ? (
+              <div className="sentence-heard" role="status">
+                <span aria-hidden="true">✓</span>
+                <div>
+                  <strong>Sentence heard</strong>
+                  <small>Argmax recognised it. Press Next speaker.</small>
+                </div>
+              </div>
+            ) : null}
             {live && currentId ? (
               <em className="enroll-captured">
                 Voice captured: {(voiced[currentId] ?? 0).toFixed(1)} s {(voiced[currentId] ?? 0) >= 2 ? '✓ enough, press Next speaker' : '(aim for 2 s)'}
@@ -113,7 +129,13 @@ export function EnrollScreen() {
         <div className="button-row">
           <button type="button" onClick={() => roundtableClient.control('enroll-redo', JSON.stringify(withAliases()))}>Redo sample</button>
           <button type="button" onClick={() => roundtableClient.control('enroll-skip', JSON.stringify(withAliases()))}>Skip</button>
-          <button type="button" onClick={() => roundtableClient.control('enroll-next', JSON.stringify(withAliases()))}>Next speaker</button>
+          <button
+            type="button"
+            className={live && currentId && heardOk[currentId] ? 'primary' : undefined}
+            onClick={() => roundtableClient.control('enroll-next', JSON.stringify(withAliases()))}
+          >
+            Next speaker
+          </button>
           <button
             type="button"
             className="primary"
@@ -159,7 +181,15 @@ export function EnrollScreen() {
                 placeholder="e.g. Yoyo"
               />
             </label>
-            {live && (voiced[person.id] ?? 0) >= 2 ? <p className="voice-done">✓ Voice sample captured</p> : null}
+            {live ? (
+              <p className={heardOk[person.id] ? 'voice-done' : 'voice-pending'}>
+                {heardOk[person.id]
+                  ? '✓ Sentence heard'
+                  : enrollPrompt?.personId === person.id
+                    ? 'Listening for the sentence…'
+                    : 'Not enrolled yet'}
+              </p>
+            ) : null}
             <div className="voice-meter" aria-label={`Live microphone level for ${person.name}`}>
               <span
                 style={{
