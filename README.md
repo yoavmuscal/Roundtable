@@ -28,7 +28,7 @@ npm run backend
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173>. The backend starts in **sim mode**: pressing **Start replay** (or `R`) generates the deterministic 91-second fake session on first use and pushes its face and transcript inputs through the real tracker, fusion, heat and caption pipeline. **Stop** runs the mock refine pass and opens Review.
+Open <http://localhost:5173>. The backend starts in **sim mode**: pressing **Start replay** (or `R`) generates the deterministic 91-second fake session on first use and pushes its face and transcript inputs through the real tracker, fusion, heat and caption pipeline. **Stop** runs the mock refine pass and opens Review.
 
 Offline demo build (one process, production UI served by FastAPI on the same origin):
 
@@ -36,7 +36,7 @@ Offline demo build (one process, production UI served by FastAPI on the same ori
 npm start
 ```
 
-Open <http://127.0.0.1:8000>.
+Open <http://localhost:8000>.
 
 ### Live Mac path
 

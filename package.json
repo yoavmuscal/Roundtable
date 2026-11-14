@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host localhost",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host 127.0.0.1",
+    "preview": "vite preview --host localhost",
     "backend": "node scripts/python.mjs -m backend.app.server --mode sim",
     "backend:live": "node scripts/python.mjs -m backend.app.server --mode live",
     "backend:replay": "node scripts/python.mjs -m backend.app.server --mode replay",

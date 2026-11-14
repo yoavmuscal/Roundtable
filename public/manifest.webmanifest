@@ -2,7 +2,7 @@
   "name": "Roundtable",
   "short_name": "Roundtable",
   "description": "Live, offline speaker-pinned captions and meeting maps.",
-  "start_url": "/?screen=live",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#10141B",

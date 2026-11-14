@@ -69,7 +69,7 @@ def main() -> int:
             print("Bonsai did not come up within 90 s; continuing (Q&A and summaries will report it offline).")
 
     env = dict(os.environ, ROUNDTABLE_WHISPER_MODEL=args.whisper_model)
-    print("Backend: live mode on http://127.0.0.1:8000 (Argmax WhisperKit streaming + SpeakerKit refine)")
+    print("Backend: live mode — open http://localhost:8000 (Argmax WhisperKit streaming + SpeakerKit refine)")
     children.append(
         subprocess.Popen(
             [sys.executable, "-m", "backend.app.server", "--mode", "live", "--session", args.session],
