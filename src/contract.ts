@@ -170,7 +170,8 @@ export type ClientMessage =
         | 'ask-end'
         | 'recalibrate'
         | 'confirm-seats'
-        | 'demo-replay';
+        | 'demo-replay'
+        | 'enroll-arm';
       value?: string;
     }
   | { type: 'ask'; text: string }

@@ -116,6 +116,7 @@ def test_enrollment_follows_the_ui_people_list(tmp_path: Path) -> None:
             {"id": "p2", "name": "Maya", "aliases": [], "color": "#2DD4A7", "shape": "square"},
             {"id": "p4", "name": "Sam", "aliases": [], "color": "#F472B6", "shape": "triangle"},
         ]
+        socket.send_json({"type": "control", "action": "enroll-arm"})
         socket.send_json({"type": "control", "action": "enroll-next", "value": json.dumps(four)})
         prompt = socket.receive_json()
         assert (prompt["personId"], prompt["index"], prompt["total"]) == ("p3", 1, 4)

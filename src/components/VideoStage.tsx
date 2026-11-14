@@ -117,11 +117,15 @@ export function VideoStage() {
     setCameraError(undefined);
     const vision = new MediaPipeBrowserVision({
       deviceId: cameraId || undefined,
+      numFaces: Math.min(4, Math.max(1, useRoundtableStore.getState().people.length || 2)),
       onObservations: (observations, atSeconds) => {
         sendVisionObservations(observations, atSeconds, (message) => roundtableClient.send(message));
       },
       onError: (error) => {
-        if (!cancelled) setCameraError(describeCameraError(error));
+        if (!cancelled) {
+          setCameraError(describeCameraError(error));
+          useRoundtableStore.getState().setVisionReady(true);
+        }
       },
     });
     vision
@@ -129,6 +133,7 @@ export function VideoStage() {
       .then(async () => {
         if (cancelled) return;
         setCameraActive(true);
+        useRoundtableStore.getState().setVisionReady(true);
         setCameras(await listCameras());
       })
       .catch(async (error: unknown) => {
@@ -159,26 +164,25 @@ export function VideoStage() {
     Object.entries(latestByPerson).forEach(([personId, captionId]) => {
       const caption = captions[captionId];
       if (caption && caption.personId === personId && sessionTime - (caption.end ?? caption.start) <= 3.5) {
-        // One sentence at a time: the previous sentence goes away when the next one starts.
         byPerson.set(personId, { ...caption, text: currentSentence(caption.text) });
       }
     });
+    // A line with no face id still belongs to an enrolled person, never a floating Unknown.
+    const loose = Object.values(captions)
+      .filter((caption) => !caption.personId || !frames.some((frame) => frame.id === caption.personId))
+      .sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
+    if (loose && frames.length && sessionTime - (loose.end ?? loose.start) <= 3.5) {
+      const target = frames.some((frame) => frame.id === activeSpeakerId) ? activeSpeakerId! : frames[0].id;
+      if (!byPerson.has(target)) byPerson.set(target, { ...loose, personId: target, text: currentSentence(loose.text) });
+    }
     return byPerson;
-  }, [captions, latestByPerson, sessionTime]);
+  }, [captions, latestByPerson, sessionTime, frames, activeSpeakerId]);
 
   const bubbles = useMemo(
     () => layoutBubbles(frames, latestCaptions, STAGE, largeCaptions),
     [frames, latestCaptions, largeCaptions],
   );
-  // Words with no matched speaker (no face moving, or camera off) still need to be readable.
-  const unattributed = useMemo(() => {
-    const latest = Object.values(captions)
-      .filter((caption) => !caption.personId || !frames.some((frame) => frame.id === caption.personId))
-      .sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
-    if (!latest || sessionTime - (latest.end ?? latest.start) > 3.5) return undefined;
-    return latest;
-  }, [captions, frames, sessionTime]);
-  const offCameraSpeaking = level > 0.12 && !activeSpeakerId;
+  const offCameraSpeaking = level > 0.12 && !activeSpeakerId && frames.length === 0;
   const mediaActive = Boolean(replayVideoUrl || cameraActive);
   const stageClass = ['video-stage', mediaActive ? 'media-present' : ''].join(' ').trim();
 
@@ -199,9 +203,6 @@ export function VideoStage() {
       <div className="stage-horizon" aria-hidden="true" />
       <div className="table-plane" aria-hidden="true" />
       <div className="stage-pill"><span /> {replay ? 'REPLAY' : status.backend === 'live' ? `LIVE · Argmax ${status.transcriberState === 'listening' ? 'listening' : 'loading…'}` : 'LIVE · cam 1'}</div>
-      {status.backend === 'live' && status.transcriberState !== 'listening' && frames.length > 0 ? (
-        <div className="argmax-loading" role="status">Argmax is loading Whisper (about 20 s). Start talking when the badge says listening.</div>
-      ) : null}
       <div className="stage-note">Captions pinned to chest</div>
       {frames.length === 0 && !mediaActive ? (
         <div className="stage-placeholder">
@@ -281,11 +282,6 @@ export function VideoStage() {
           </article>
         );
       })}
-      {unattributed ? (
-        <div className={largeCaptions ? 'stage-subtitle large' : 'stage-subtitle'} role="status" aria-live="polite">
-          <CaptionText text={currentSentence(unattributed.text)} people={people} />
-        </div>
-      ) : null}
       {offCameraSpeaking ? (
         <div className="off-camera-cue" role="status">
           <span aria-hidden="true">●</span> Someone is speaking off-camera

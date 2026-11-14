@@ -331,7 +331,7 @@ kbd {
   transition: left 100ms linear, top 100ms linear, opacity 150ms linear;
 }
 .speech-bubble.large { font-size: 1.35rem; line-height: 1.22; padding: 0.85rem 1rem; font-weight: 600; }
-.speech-bubble > span { display: -webkit-box; overflow: hidden; width: 100%; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.speech-bubble > span { display: -webkit-box; overflow: hidden; width: 100%; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
 .speech-bubble strong { color: #fff; font-weight: 800; }
 .speech-bubble.low-confidence { border-style: dashed; }
 .speech-bubble.mentioned { border-width: 2.5px; }
@@ -593,6 +593,19 @@ h1 { margin-bottom: 1rem; font-size: clamp(1.8rem, 3.4vw, 2.9rem); line-height: 
 .history-heading span { color: var(--text-muted); font-size: 0.75rem; }
 .history-heading button, .answer-card .card-heading button { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
 .history-list { overflow-y: auto; display: grid; gap: 0.6rem; padding: 1rem; }
+.live-screen { position: relative; }
+.model-loading {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.8rem;
+  background: rgba(11, 14, 19, 0.88);
+  text-align: center;
+}
+.model-loading p { max-width: 360px; color: var(--text-soft); }
 .live-ask {
   position: fixed;
   z-index: 41;

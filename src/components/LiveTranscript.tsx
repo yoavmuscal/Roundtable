@@ -11,6 +11,7 @@ export function LiveTranscript() {
   const history = useRoundtableStore((state) => state.history);
   const captions = useRoundtableStore((state) => state.captions);
   const people = useRoundtableStore((state) => state.people);
+  const activeSpeakerId = useRoundtableStore((state) => state.activeSpeakerId);
   const largeCaptions = useRoundtableStore((state) => state.largeCaptions);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -37,12 +38,14 @@ export function LiveTranscript() {
       <div ref={scroller} className="live-transcript-lines">
         {entries.length ? (
           entries.map((caption) => {
-            const person = people.find((item) => item.id === caption.personId);
+            const person = people.find((item) => item.id === caption.personId)
+              ?? people.find((item) => item.id === activeSpeakerId)
+              ?? people[0];
             const color = person?.color ?? '#9AA1AD';
             return (
               <span key={caption.id} className={caption.kind === 'partial' ? 'transcript-entry partial' : 'transcript-entry'}>
                 <ShapeGlyph shape={person?.shape ?? 'circle'} color={color} size={10} />
-                <b style={{ color }}>{person?.name ?? 'Unknown'}</b>
+                <b style={{ color }}>{person?.name ?? 'Speaker'}</b>
                 <CaptionText text={caption.text} people={people} />
               </span>
             );

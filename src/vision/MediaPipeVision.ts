@@ -48,6 +48,8 @@ export interface BrowserVisionOptions {
   onError?: (error: Error) => void;
   /** Camera to open; omitted = prefer a wired iPhone, else the default (laptop) camera. */
   deviceId?: string;
+  /** Enrolled headcount. Fewer faces means less GPU work on an 8 GB laptop. */
+  numFaces?: number;
 }
 
 /** Camera + MediaPipe processor. All model and WASM paths are local app assets. */
@@ -81,13 +83,18 @@ export class MediaPipeBrowserVision {
     this.faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: assets.faceModelPath, delegate: 'GPU' },
       runningMode: 'VIDEO',
-      numFaces: 4,
+      numFaces: this.options.numFaces ?? 3,
+      minFaceDetectionConfidence: 0.55,
+      minFacePresenceConfidence: 0.55,
+      minTrackingConfidence: 0.6,
       outputFaceBlendshapes: true,
     });
     this.poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: assets.poseModelPath, delegate: 'GPU' },
       runningMode: 'VIDEO',
-      numPoses: 4,
+      numPoses: this.options.numFaces ?? 3,
+      minPoseDetectionConfidence: 0.55,
+      minTrackingConfidence: 0.6,
     });
     if (!video.srcObject) {
       this.stream = await openPreferredCamera(this.options.deviceId);

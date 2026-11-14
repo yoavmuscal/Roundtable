@@ -19,28 +19,32 @@ export function EnrollScreen() {
   const [promptStartedAt, setPromptStartedAt] = useState(0);
   const lastLevelAt = useRef<number | undefined>(undefined);
   const currentId = enrollPrompt?.personId;
+  const [recording, setRecording] = useState(false);
   useEffect(() => {
+    setRecording(false);
     setPromptStartedAt(useRoundtableStore.getState().sessionTime);
     lastLevelAt.current = undefined;
   }, [currentId]);
   useEffect(() => {
-    if (!currentId) return;
+    if (!currentId || !recording) return;
     const previous = lastLevelAt.current;
     lastLevelAt.current = sessionTime;
     if (previous === undefined || level < 0.02) return;
     const step = Math.min(0.2, Math.max(0, sessionTime - previous));
     setVoiced((current) => ({ ...current, [currentId]: (current[currentId] ?? 0) + step }));
-  }, [level, sessionTime, currentId]);
+  }, [level, sessionTime, currentId, recording]);
   const heard = useRoundtableStore((state) => {
+    if (!recording) return '';
     const lines = Object.values(state.captions)
-      .filter((caption) => (caption.end ?? caption.start) >= promptStartedAt)
+      .filter((caption) => caption.start >= promptStartedAt - 0.2)
       .sort((a, b) => (a.end ?? a.start) - (b.end ?? b.start))
       .map((caption) => caption.text);
     return lines.join(' ');
   });
   const sentences = enrollPrompt ? promptSentences(enrollPrompt.prompt) : [];
-  const heardFlags = enrollPrompt ? sentencesHeard(enrollPrompt.prompt, heard) : [];
-  const currentHeard = Boolean(enrollPrompt && currentId && sentenceHeard(enrollPrompt.prompt, heard));
+  const spokeEnough = Boolean(currentId && (voiced[currentId] ?? 0) >= 1.2);
+  const heardFlags = enrollPrompt && recording && spokeEnough ? sentencesHeard(enrollPrompt.prompt, heard) : sentences.map(() => false);
+  const currentHeard = Boolean(recording && spokeEnough && enrollPrompt && currentId && sentenceHeard(enrollPrompt.prompt, heard));
   // People whose enrollment sentences Argmax recognised (kept after moving to the next person).
   const [heardOk, setHeardOk] = useState<Record<string, boolean>>({});
   useEffect(() => {
@@ -59,6 +63,16 @@ export function EnrollScreen() {
       aliases: [person.name, ...(aliases[person.id]?.split(',').map((item) => item.trim()).filter(Boolean) ?? [])],
     }));
 
+  const beginRecording = () => {
+    if (!currentId) return;
+    useRoundtableStore.setState({ captions: {}, latestByPerson: {}, history: [] });
+    setHeardOk((current) => ({ ...current, [currentId]: false }));
+    setVoiced((current) => ({ ...current, [currentId]: 0 }));
+    setPromptStartedAt(useRoundtableStore.getState().sessionTime);
+    setRecording(true);
+    roundtableClient.control('enroll-arm', JSON.stringify(withAliases()));
+  };
+
   const start = () => {
     const enrolled = withAliases();
     setPeopleNames(enrolled);
@@ -73,6 +87,7 @@ export function EnrollScreen() {
       mapHexes: [],
       answer: undefined,
       refined: undefined,
+      visionReady: false,
     });
     roundtableClient.control('start', JSON.stringify(enrolled));
     setPhase('live');
@@ -92,7 +107,7 @@ export function EnrollScreen() {
             <span>
               {enrollPrompt.index + 1} of {enrollPrompt.total}
             </span>
-            <strong>Read both sentences out loud.</strong>
+            <strong>{recording ? 'Read both sentences out loud.' : 'Press Begin recording, then read both sentences.'}</strong>
             <ul className="sentence-checks">
               {sentences.map((sentence, index) => (
                 <li key={sentence} className={heardFlags[index] ? 'ok' : undefined}>
@@ -104,11 +119,13 @@ export function EnrollScreen() {
             <em className="enroll-heard">
               {!live
                 ? 'Replay mode: voice enrollment runs only in live mode.'
-                : !listening
-                  ? 'Argmax is loading Whisper (about 20 s)…'
-                  : heard
-                    ? `Heard: “${heard}”`
-                    : 'Listening… speak now.'}
+                : !recording
+                  ? 'Not recording yet.'
+                  : !listening
+                    ? 'Argmax is loading Whisper (about 20 s)…'
+                    : heard
+                      ? `Heard: “${heard}”`
+                      : 'Recording… speak now.'}
             </em>
             {live && currentId && currentHeard ? (
               <div className="sentence-heard" role="status">
@@ -122,7 +139,7 @@ export function EnrollScreen() {
             {status.voiceWarning ? (
               <div className="voice-warning" role="alert">{status.voiceWarning}</div>
             ) : null}
-            {live && currentId ? (
+            {live && currentId && recording ? (
               <em className="enroll-captured">
                 Voice captured: {(voiced[currentId] ?? 0).toFixed(1)} s {(voiced[currentId] ?? 0) >= 5 ? '✓ enough, press Next speaker' : '(aim for 5 s)'}
               </em>
@@ -141,7 +158,10 @@ export function EnrollScreen() {
           <span className="people-count">{people.length} of {MAX_PEOPLE} seats</span>
         </div>
         <div className="button-row">
-          <button type="button" onClick={() => roundtableClient.control('enroll-redo', JSON.stringify(withAliases()))}>Redo sample</button>
+          <button type="button" className="primary" onClick={beginRecording} disabled={!enrollPrompt || recording}>
+            {recording ? 'Recording…' : 'Begin recording'}
+          </button>
+          <button type="button" onClick={() => { setRecording(false); roundtableClient.control('enroll-redo', JSON.stringify(withAliases())); }}>Redo sample</button>
           <button type="button" onClick={() => roundtableClient.control('enroll-skip', JSON.stringify(withAliases()))}>Skip</button>
           <button
             type="button"

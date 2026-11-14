@@ -67,9 +67,25 @@ function useLiveScale() {
 
 export function LiveScreen() {
   useLiveScale();
+  const status = useRoundtableStore((state) => state.status);
+  const visionReady = useRoundtableStore((state) => state.visionReady);
+  const loading = status.backend === 'live' && (status.transcriberState !== 'listening' || !visionReady);
 
   return (
     <main className="live-screen" aria-label="Live conversation view">
+      {loading ? (
+        <div className="model-loading" role="status">
+          <div className="progress-ring" style={{ '--progress': status.transcriberState === 'listening' ? '70%' : '35%' } as React.CSSProperties}>
+            <span>{status.transcriberState === 'listening' ? '70%' : '35%'}</span>
+          </div>
+          <strong>Loading models</strong>
+          <p>
+            {status.transcriberState === 'listening'
+              ? 'Starting the camera and face tracking.'
+              : 'Argmax is loading Whisper. Face tracking starts alongside it.'}
+          </p>
+        </div>
+      ) : null}
       <div className="live-frame">
         <div className="live-canvas">
           <VideoStage />

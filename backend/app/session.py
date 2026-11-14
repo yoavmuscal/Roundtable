@@ -83,6 +83,7 @@ class SessionEngine:
         self.recording_offsets = {"audioS": 0.0, "videoS": 0.0}
         self.enrollment_intervals: dict[str, list[tuple[float, float]]] = {}
         self.enrollment_started_at: float | None = None
+        self.enrollment_armed = False
         self.tracker = PersonTracker(thresholds=self.thresholds)
         self.fusion = SpeakerFusion(self.thresholds)
         self.active_gate = ActiveSpeakerGate()
@@ -124,6 +125,19 @@ class SessionEngine:
 
     def begin_enrollment(self, time_s: float) -> None:
         self.enrollment_started_at = time_s
+
+    def arm_enrollment(self, time_s: float) -> None:
+        """Start this person's sample only when they press Begin recording."""
+        self.enrollment_started_at = time_s
+        self.enrollment_armed = True
+
+    def take_enrollment_sample(self, person_id: str, time_s: float) -> None:
+        if not getattr(self, "enrollment_armed", False):
+            self.enrollment_started_at = None
+            return
+        self.record_enrollment(person_id, time_s)
+        self.enrollment_armed = False
+        self.enrollment_started_at = None
 
     def record_enrollment(self, person_id: str, time_s: float) -> None:
         """Store the voice sample window for one person and bind their face.
@@ -399,7 +413,7 @@ class SessionEngine:
         """Show still-changing words immediately so the bubble appears while someone talks."""
         start = self.turn_builder.current_start if self.turn_builder.current_start is not None else time_s
         attribution = self.fusion.attribute(max(0.0, start - 0.2), time_s)
-        speaker = self.turn_builder.current_speaker or attribution.speaker_id
+        speaker = self._named_speaker(self.turn_builder.current_speaker or attribution.speaker_id, time_s)
         if speaker:
             self.caption_speaker, self.caption_speaker_at = speaker, time_s
         words = list(self.turn_builder.current_words) + list(self.transcript.partial_words)
@@ -422,7 +436,8 @@ class SessionEngine:
         if commit:
             start = self.turn_builder.current_start if self.turn_builder.current_start is not None else commit_time
             attribution = self.fusion.attribute(start, commit_time)
-            completed = self.turn_builder.add_words(commit.words, commit_time, attribution.speaker_id, attribution.confidence)
+            speaker = self._named_speaker(attribution.speaker_id, commit_time)
+            completed = self.turn_builder.add_words(commit.words, commit_time, speaker, attribution.confidence)
             if completed:
                 messages.extend(self._finalize_turn(completed))
         completed = self.turn_builder.end_turn(time_s)
@@ -441,7 +456,7 @@ class SessionEngine:
         # Argmax confirms words seconds after they are said; looking at mouths at confirmation
         # time put every caption on whoever happened to be talking then.
         attribution = self.fusion.attribute(spoken_start, max(spoken_end, spoken_start + 0.3))
-        speaker = speaker_hint or attribution.speaker_id
+        speaker = self._named_speaker(speaker_hint or attribution.speaker_id, spoken_end)
         if speaker:
             self.caption_speaker, self.caption_speaker_at = speaker, max(spoken_end, getattr(self, "caption_speaker_at", -99.0))
         completed = self.turn_builder.add_words(commit.words, spoken_end, speaker, attribution.confidence)
@@ -565,7 +580,42 @@ class SessionEngine:
         if not scores:
             return None
         best_id, best_score = max(scores.items(), key=lambda item: item[1])
-        return best_id if best_score >= 0.25 else None
+        return best_id if best_score >= 0.08 else None
+
+    def steer_open_speaker(self, person_id: str, time_s: float, coverage: float) -> list[dict[str, Any]]:
+        """Apply a diarization hit to the sentence still being spoken."""
+        self.fusion.add_voice(max(0.0, time_s - 1.75), person_id, coverage)
+        if self.phase != "live" or not self.turn_builder.current_words or coverage < 0.55:
+            return []
+        enrolled = {str(person["id"]) for person in self.people}
+        if person_id not in enrolled:
+            return []
+        self.turn_builder.current_speaker = person_id
+        self.caption_speaker, self.caption_speaker_at = person_id, time_s
+        return [self._live_partial_caption(time_s)]
+
+    def _named_speaker(self, speaker: str | None, time_s: float) -> str | None:
+        """Enrolled sessions always name a person. Unknown is not a seat."""
+        enrolled = [str(person["id"]) for person in self.people]
+        if not enrolled:
+            return speaker
+        if speaker in enrolled:
+            return speaker
+        visible = self._strongest_visible_speaker(time_s)
+        if visible in enrolled:
+            return visible
+        if self.active_speaker in enrolled:
+            return self.active_speaker
+        recent = [hint for hint in self.fusion.voice_hints if time_s - 4.0 <= hint.time <= time_s + 0.3]
+        if recent and recent[-1].person_id in enrolled:
+            return recent[-1].person_id
+        present = [
+            track for track in self.tracker.tracks.values()
+            if track.id in enrolled and track.state != "away"
+        ]
+        if present:
+            return max(present, key=lambda track: track.observation.mouth_score).id
+        return enrolled[0]
 
     def _finalize_turn(self, turn: Turn) -> list[dict[str, Any]]:
         self.turns.append(turn)

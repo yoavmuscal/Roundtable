@@ -272,7 +272,7 @@ def create_app(
     async def watch_voice() -> None:
         """SpeakerKit on the last few seconds, folded into the mouth decision while speech is open."""
         while True:
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.5)
             current = engine()
             monitor = app.state.audio_monitor
             if voice_ids is None or monitor is None or current.phase != "live" or current.last_rms < 0.015:
@@ -286,8 +286,7 @@ def create_app(
             if current is not engine() or current.phase != "live":
                 continue
             if match.person_id and match.coverage >= 0.55:
-                # Stamp the middle of the clip so a result that arrives after the sentence cannot relabel it.
-                current.fusion.add_voice(now - 1.75, match.person_id, match.coverage)
+                await emit(current, current.steer_open_speaker(match.person_id, now, match.coverage))
 
     async def warm_speakerkit() -> None:
         """SpeakerKit's first call loads its models (~14 s); do it during enrollment."""
@@ -639,13 +638,15 @@ def create_app(
                 app.state.voice_warning = None
                 await broadcast(SessionEngine._message(now, "status", **current_status()))
             if action == "enroll_next":
-                current.record_enrollment(current.people[cursor]["id"], now)
+                current.take_enrollment_sample(current.people[cursor]["id"], now)
                 cursor += 1
             elif action == "enroll_skip":
-                current.begin_enrollment(now)
+                current.enrollment_armed = False
+                current.enrollment_started_at = None
                 cursor += 1
             else:
-                current.begin_enrollment(now)
+                current.enrollment_armed = False
+                current.enrollment_started_at = None
             app.state.enroll_cursor = min(cursor, len(current.people) - 1)
             if cursor >= len(current.people):
                 await broadcast(SessionEngine._message(now, "status", enrollment="complete", **current_status()))
@@ -716,12 +717,15 @@ def create_app(
             app.state.enroll_cursor = 0
             app.state.voice_warning = None
             current.enrollment_intervals = {}
+            current.enrollment_armed = False
+            current.enrollment_started_at = None
             await ensure_live_audio()
             ensure_transcriber()
             asyncio.create_task(warm_speakerkit())
-            current.begin_enrollment(current.clock())
             await broadcast(SessionEngine._message(current.clock(), "phase", phase="enroll"))
             await broadcast(current.enroll_prompt(0))
+        elif action == "enroll_arm":
+            current.arm_enrollment(current.clock())
         elif action in {"ask_begin", "ask_end"}:
             await broadcast(SessionEngine._message(current.clock(), "status", action=action, **current_status()))
 

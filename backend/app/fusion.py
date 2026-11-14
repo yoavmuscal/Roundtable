@@ -181,8 +181,9 @@ class SpeakerFusion:
         hint = hints[-1]
         blended = dict(scores)
         mouth = blended.get(hint.person_id, 0.0)
-        voice_score = 0.35 + 0.5 * hint.coverage
-        blended[hint.person_id] = min(1.0, 0.5 * mouth + 0.5 * voice_score)
+        voice_score = min(1.0, 0.5 + 0.5 * hint.coverage)
+        # Voice can carry a covered mouth, but a much stronger face still wins.
+        blended[hint.person_id] = min(1.0, 0.3 * mouth + 0.7 * voice_score)
         return blended
 
     def attribute(self, start_s: float, end_s: float) -> Attribution:
@@ -207,7 +208,8 @@ class SpeakerFusion:
         elif top_score >= self.thresholds["fusion_fallback"]:
             result = Attribution(top_person, top_score, dashed=True, reason="fallback")
         else:
-            result = Attribution(None, 0.0, reason="ambiguous")
+            # Someone enrolled is speaking. Name the best face instead of dropping the line.
+            result = Attribution(top_person, max(top_score, 0.25), dashed=True, reason="enrolled")
         if result.speaker_id is not None:
             self.previous_speaker = result.speaker_id
             self.previous_end = end_s

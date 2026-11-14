@@ -5,7 +5,6 @@ import {
   homographyFromPoints,
   invert3x3,
   tableGridLines,
-  validateCalibration,
 } from '../lib/geometry';
 import { defaultSeats } from '../lib/people';
 import { ShapeGlyph } from '../lib/shape';
@@ -36,11 +35,9 @@ function eventPoint(svg: SVGSVGElement, event: React.PointerEvent): Point {
 
 export function SetupScreen() {
   const people = useRoundtableStore((state) => state.people);
-  const calibration = useRoundtableStore((state) => state.calibration);
   const setPhase = useRoundtableStore((state) => state.setPhase);
   const [corners, setCorners] = useState<Point[]>(DEMO_CORNERS);
   const [center, setCenter] = useState<Point>({ x: 0.5, y: 0.84 });
-  const [clickingCenter, setClickingCenter] = useState(false);
   const [seats, setSeats] = useState<Record<string, Point>>(() => defaultSeats(people));
   // Seats follow the enrolled people: new people get a default seat, removed people lose theirs.
   useEffect(() => {
@@ -66,10 +63,6 @@ export function SetupScreen() {
   }, [corners]);
 
   const tableToImage = useMemo(() => (imageToTable ? invert3x3(imageToTable) : null), [imageToTable]);
-  const validationError =
-    corners.length === 4
-      ? validateCalibration({ corners: corners as [Point, Point, Point, Point], tableSize: { width: 1.8, height: 0.9 }, center })
-      : null;
   const gridLines = useMemo(() => {
     if (!tableToImage) return [];
     return tableGridLines({ width: 1.8, height: 0.9 }).map((line) =>
@@ -77,23 +70,9 @@ export function SetupScreen() {
     );
   }, [tableToImage]);
 
-  const runChecks = () => {
-    if (corners.length !== 4 || validationError) return;
-    roundtableClient.calibrate({
-      corners: corners as [Point, Point, Point, Point],
-      tableSize: { width: 1.8, height: 0.9 },
-      center,
-    });
-  };
-
   const handlePointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
     if (!svgRef.current || draggingSeat) return;
     const point = eventPoint(svgRef.current, event);
-    if (clickingCenter) {
-      setCenter(point);
-      setClickingCenter(false);
-      return;
-    }
     if (corners.length < 4) setCorners([...corners, point]);
   };
 
@@ -113,39 +92,27 @@ export function SetupScreen() {
         <p className="eyebrow">Step 1 · Calibrate the table</p>
         <h1>Make captions land on people, not just the screen.</h1>
         <p>
-          Click the taped corners in order: far-left, far-right, near-right, near-left. Then repeat
-          Check B by clicking the center tape. Drag seat markers if the numbered dots do not match.
+          Name each seat, then continue. Roundtable uses a default table if you skip the corner clicks.
         </p>
-        <ol className="check-list">
-          <li className={corners.length === 4 && !validationError ? 'done' : ''}>Four corners form a valid table</li>
-          <li className={calibration?.ok ? 'done' : ''}>25 cm grid lies flat on the tabletop</li>
-          <li className={calibration?.ok ? 'done' : ''}>Center click matches the projected table center</li>
-        </ol>
         <div className="button-row">
           <button type="button" onClick={() => { setCorners(DEMO_CORNERS); setCenter({ x: 0.5, y: 0.84 }); }}>
             Use demo corners
           </button>
           <button type="button" onClick={() => setCorners([])}>Clear clicks</button>
-          <button type="button" onClick={() => setClickingCenter(true)} aria-pressed={clickingCenter}>
-            Click center tape
-          </button>
-          <button type="button" className="primary" onClick={runChecks} disabled={corners.length !== 4 || Boolean(validationError)}>
-            Run visual checks
-          </button>
           <button type="button" className="primary" onClick={() => {
+              if (corners.length === 4) {
+                roundtableClient.calibrate({
+                  corners: corners as [Point, Point, Point, Point],
+                  tableSize: { width: 1.8, height: 0.9 },
+                  center,
+                });
+              }
               roundtableClient.control('confirm-seats', JSON.stringify(people));
               setPhase('enroll');
-            }} disabled={Boolean(validationError)}>
+            }}>
             Continue to enrollment
           </button>
         </div>
-        {validationError ? <p className="error-message">{validationError}</p> : null}
-        {calibration ? (
-          <p className={calibration.ok ? 'success-message' : 'error-message'} role="status">
-            {calibration.message}
-            {calibration.centerError !== undefined ? ` Center error: ${(calibration.centerError * 100).toFixed(1)}%.` : ''}
-          </p>
-        ) : null}
       </section>
 
       <section className="setup-stage" aria-label="Calibration camera preview">

@@ -25,7 +25,7 @@ const tailDirection: Record<AnchorMode, Point> = {
 
 export function estimateBubbleSize(_text: string, largeMode: boolean): Size {
   // Fixed dimensions prevent the camera overlay from visually jumping as words arrive.
-  return largeMode ? { width: 330, height: 96 } : { width: 232, height: 66 };
+  return largeMode ? { width: 330, height: 148 } : { width: 232, height: 112 };
 }
 
 function intersects(a: Box, b: Box): boolean {
@@ -81,7 +81,7 @@ export function layoutBubbles(
   return frames.flatMap((frame) => {
     const caption = captionsByPerson.get(frame.id);
     if (!caption) return [];
-    const text = caption.text.length > 54 ? `…${caption.text.slice(-53).trimStart()}` : caption.text;
+    const text = caption.text.length > 120 ? `…${caption.text.slice(-119).trimStart()}` : caption.text;
     const size = estimateBubbleSize(text, largeMode);
     const anchor = normalizedToStage(frame.anchor.point, stage);
     const preferred = modes.indexOf(frame.anchor.mode) >= 0 ? frame.anchor.mode : 'chest';

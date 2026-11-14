@@ -61,6 +61,8 @@ interface RoundtableState {
   sessionTime: number;
   tableSize: { width: number; height: number };
   askOpen: boolean;
+  visionReady: boolean;
+  setVisionReady: (ready: boolean) => void;
   applyMessage: (message: ServerMessage) => void;
   setConnected: (connected: boolean, message?: string) => void;
   setBackgrounded: (backgrounded: boolean) => void;
@@ -112,6 +114,7 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
   sessionTime: 0,
   tableSize: DEFAULT_TABLE_SIZE,
   askOpen: false,
+  visionReady: false,
 
   applyMessage: (message) => {
     const state = get();
@@ -238,6 +241,7 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
   clearAnswer: () => set({ answer: undefined }),
   openAsk: () => set({ askOpen: true }),
   closeAsk: () => set({ askOpen: false }),
+  setVisionReady: (visionReady) => set({ visionReady }),
   resetSession: () =>
     set({
       phase: 'setup',
