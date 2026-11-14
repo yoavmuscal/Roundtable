@@ -126,6 +126,8 @@ def create_app(
                 changed_count = result.changed_count
             except Exception as exc:
                 await broadcast(SessionEngine._message(current.clock(), "error", code="refine", message=str(exc)))
+        await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="tags", progress=0.55))
+        refined_turns = await current.tag_turns(refined_turns)
         await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="summary", progress=0.7))
         summary = await current.summarize()
         current.recorder.write_turns("refined_transcript.jsonl", refined_turns)
@@ -264,6 +266,22 @@ def create_app(
         finally:
             await manager.disconnect(websocket)
 
+    async def ensure_live_audio() -> None:
+        if mode != "live" or app.state.audio_monitor is not None:
+            return
+
+        async def emit_level(time_s: float, rms: float, peak: float) -> None:
+            await broadcast(engine().handle_level(time_s, rms, peak))
+
+        monitor = MicrophoneLevelMonitor(emit_level, session_dir / "audio.wav")
+        try:
+            await monitor.start()
+            app.state.audio_monitor = monitor
+        except RuntimeError as exc:
+            await broadcast(
+                SessionEngine._message(engine().clock(), "error", code="audio", message=str(exc))
+            )
+
     async def handle_control(message: dict[str, Any]) -> None:
         action = message["action"]
         current = engine()
@@ -281,20 +299,18 @@ def create_app(
                     run_simulation(sim_session_dir, emit=emit, speed=speed, output_dir=session_dir)
                 )
             else:
+                if message.get("value"):
+                    try:
+                        people = json.loads(str(message["value"]))
+                        if isinstance(people, list):
+                            current.set_enrolled_people(people)
+                    except (json.JSONDecodeError, TypeError, KeyError):
+                        await broadcast(
+                            SessionEngine._message(current.clock(), "error", code="people", message="Invalid enrolled people payload")
+                        )
                 for outgoing in current.start():
                     await broadcast(outgoing)
-
-                async def emit_level(time_s: float, rms: float, peak: float) -> None:
-                    await broadcast(engine().handle_level(time_s, rms, peak))
-
-                monitor = MicrophoneLevelMonitor(emit_level, session_dir / "audio.wav")
-                try:
-                    await monitor.start()
-                    app.state.audio_monitor = monitor
-                except RuntimeError as exc:
-                    await broadcast(
-                        SessionEngine._message(current.clock(), "error", code="audio", message=str(exc))
-                    )
+                await ensure_live_audio()
                 app.state.transcriber_task = asyncio.create_task(stream_transcriber())
         elif action == "stop":
             if app.state.sim_task and not app.state.sim_task.done():
@@ -306,6 +322,7 @@ def create_app(
                 await broadcast(outgoing)
             asyncio.create_task(refine_after_stop())
         elif action == "enroll_next":
+            current.complete_enrollment(current.clock(), record_interval=True)
             outgoing = current.enroll_person(
                 str(message.get("name", f"Person {current.tracker.expected_people + 1}")),
                 list(message.get("aliases", [])),
@@ -324,8 +341,17 @@ def create_app(
             await broadcast(SessionEngine._message(current.clock(), "phase", phase="setup"))
         elif action == "confirm_seats":
             current.phase = "enroll"
+            current.begin_enrollment(current.clock())
+            await ensure_live_audio()
             await broadcast(SessionEngine._message(current.clock(), "phase", phase="enroll"))
-        elif action in {"ask_begin", "ask_end", "enroll_redo", "enroll_skip"}:
+        elif action == "enroll_redo":
+            current.begin_enrollment(current.clock())
+            await broadcast(SessionEngine._message(current.clock(), "status", action=action, **status_message(model="mock-bonsai" if mode == "sim" else "bonsai-2-2b", seconds_per_turn=None)))
+        elif action == "enroll_skip":
+            current.complete_enrollment(current.clock(), record_interval=False)
+            current.enroll_person(f"Person {current.tracker.expected_people + 1}")
+            await broadcast(SessionEngine._message(current.clock(), "status", action=action, **status_message(model="mock-bonsai" if mode == "sim" else "bonsai-2-2b", seconds_per_turn=None)))
+        elif action in {"ask_begin", "ask_end"}:
             await broadcast(SessionEngine._message(current.clock(), "status", action=action, **status_message(model="mock-bonsai" if mode == "sim" else "bonsai-2-2b", seconds_per_turn=None)))
 
     return app

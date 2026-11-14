@@ -1,6 +1,8 @@
+import asyncio
+
 import pytest
 
-from backend.app.bonsai import JsonSchemaError, TAG_SCHEMA, extract_json_value, validate_json_schema
+from backend.app.bonsai import BonsaiWorker, JsonSchemaError, TAG_SCHEMA, extract_json_value, validate_json_schema
 from backend.app.models import Turn
 from backend.app.refine import (
     match_clusters_to_people,
@@ -33,6 +35,33 @@ def test_schema_validation() -> None:
         validate_json_schema({"tags": [], "repliesTo": None}, TAG_SCHEMA)
     with pytest.raises(JsonSchemaError):
         validate_json_schema({"tags": [], "repliesTo": 3, "actionOwner": None}, TAG_SCHEMA)
+
+
+@pytest.mark.asyncio
+async def test_bonsai_worker_prioritizes_ask_name_tag_layout() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    class BlockingClient:
+        async def generate_json(self, task, payload, schema, timeout_s):
+            calls.append(task)
+            if task == "blocking":
+                started.set()
+                await release.wait()
+            return {}
+
+    worker = BonsaiWorker(BlockingClient())
+    first = asyncio.create_task(worker.submit("blocking", {}, {}, 1))
+    await started.wait()
+    layout = asyncio.create_task(worker.submit("layout", {}, {}, 1))
+    tag = asyncio.create_task(worker.submit("tag", {}, {}, 1))
+    name = asyncio.create_task(worker.submit("name", {}, {}, 1))
+    ask = asyncio.create_task(worker.submit("ask", {}, {}, 1))
+    release.set()
+    await asyncio.gather(first, layout, tag, name, ask)
+    await worker.stop()
+    assert calls == ["blocking", "ask", "name", "tag", "layout"]
 
 
 def test_parse_speakerkit_jsonl_and_plain_lines() -> None:

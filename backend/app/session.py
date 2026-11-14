@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .accessibility import NameAlert
-from .bonsai import ANSWER_SCHEMA, SUMMARY_SCHEMA, BonsaiWorker
+from .bonsai import ANSWER_SCHEMA, SUMMARY_SCHEMA, TAG_SCHEMA, BonsaiWorker
 from .calibration import Calibration
 from .contract import CONTRACT_VERSION, SPEAKERS, turn_id
 from .fusion import ActiveSpeakerGate, SpeakerFusion
@@ -80,6 +80,8 @@ class SessionEngine:
         self.recorder = SessionRecorder(self.session_dir)
         self.started_wall = time.time()
         self.recording_offsets = {"audioS": 0.0, "videoS": 0.0}
+        self.enrollment_intervals: dict[str, list[tuple[float, float]]] = {}
+        self.enrollment_started_at: float | None = None
         self.tracker = PersonTracker(thresholds=self.thresholds)
         self.fusion = SpeakerFusion(self.thresholds)
         self.active_gate = ActiveSpeakerGate()
@@ -103,6 +105,25 @@ class SessionEngine:
         message = self._message(0.0, "calibration_result", **calibration.result())
         self.recorder.record(message)
         return message
+
+    def begin_enrollment(self, time_s: float) -> None:
+        self.enrollment_started_at = time_s
+
+    def complete_enrollment(self, time_s: float, record_interval: bool = True) -> None:
+        person_id = f"p{min(self.tracker.expected_people + 1, 4)}"
+        if record_interval and self.enrollment_started_at is not None and time_s > self.enrollment_started_at:
+            self.enrollment_intervals.setdefault(person_id, []).append((self.enrollment_started_at, time_s))
+        self.enrollment_started_at = time_s
+
+    def set_enrolled_people(self, people: list[dict[str, Any]]) -> None:
+        self.people = [dict(person) for person in people[:4]]
+        self.tracker.expected_people = len(self.people)
+        for person in self.people:
+            self.name_alerts.set_names(
+                str(person["id"]),
+                str(person.get("name", person["id"])),
+                [str(alias) for alias in person.get("aliases", [])],
+            )
 
     def enroll_person(self, name: str, aliases: list[str] | None = None) -> dict[str, Any]:
         person_index = min(self.tracker.expected_people, 3)
@@ -274,6 +295,25 @@ class SessionEngine:
             timeout_s,
         )
         return self._message(self.clock(), "answer", text=result["text"], citedTurnIds=result["citedTurnIds"])
+
+    async def tag_turns(self, turns: list[Turn], timeout_s: float = 4.0) -> list[Turn]:
+        if self.bonsai is None:
+            return turns
+        tagged: list[Turn] = []
+        for turn in turns:
+            try:
+                result = await self.bonsai.submit(
+                    "tag",
+                    {"turnId": turn.id, "text": turn.text, "speakerId": turn.speaker_id},
+                    TAG_SCHEMA,
+                    timeout_s,
+                )
+                turn.tags = [str(tag) for tag in result.get("tags", [])]
+            except Exception:
+                # Refine remains useful when an individual tag job times out.
+                pass
+            tagged.append(turn)
+        return tagged
 
     async def summarize(self, timeout_s: float = 30.0) -> dict[str, Any]:
         if self.bonsai is None:
