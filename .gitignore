@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+.env
+.env.*
+!.env.example
+sessions/*
+!sessions/.gitkeep
+coverage/
+*.log

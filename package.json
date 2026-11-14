@@ -1,0 +1,27 @@
+{
+  "name": "roundtable",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "backend": "python3 -m backend.main",
+    "test": "vitest run && python3 -m unittest discover -s tests -p 'test_*.py'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "vite": "^7.2.7",
+    "typescript": "^5.9.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "vitest": "^4.0.15"
+  }
+}
