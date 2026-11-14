@@ -119,38 +119,86 @@ def match_clusters_to_people(
     enrollment_intervals: dict[str, list[tuple[float, float]]] | None = None,
     live_turns: list[Turn] | None = None,
 ) -> dict[str, str]:
+    from itertools import permutations
+
     clusters = sorted({segment.cluster for segment in segments})
+    if not clusters:
+        return {}
     enrollment_intervals = enrollment_intervals or {}
-    mapping: dict[str, str] = {}
+    live_turns = live_turns or []
+
+    people_set: set[str] = set(enrollment_intervals.keys())
+    for turn in live_turns:
+        if turn.speaker_id is not None and turn.confidence >= 0.48:
+            people_set.add(turn.speaker_id)
+    people = sorted(people_set)
+    if not people:
+        return {}
+
+    # Score each (cluster, person) pair using normalized enrollment share (weight 2.0)
+    # plus high-confidence mouth-attributed turn share (weight 1.0) so even skipped
+    # enrollments or unequal enrollment lengths resolve cleanly 1-to-1.
+    enroll_totals = {
+        person: max(0.01, sum(max(0.0, end - start) for start, end in intervals))
+        for person, intervals in enrollment_intervals.items()
+    }
+    turn_totals: dict[str, float] = {}
+    for turn in live_turns:
+        if turn.speaker_id is not None and turn.confidence >= 0.48:
+            turn_totals[turn.speaker_id] = turn_totals.get(turn.speaker_id, 0.0) + max(0.01, turn.end - turn.start)
+
+    pair_score: dict[tuple[str, str], float] = {}
     for cluster in clusters:
         cluster_segments = [segment for segment in segments if segment.cluster == cluster]
-        scores = {
-            person: sum(
-                _overlap(segment.start, segment.end, start, end)
-                for segment in cluster_segments
-                for start, end in intervals
-            )
-            for person, intervals in enrollment_intervals.items()
-        }
-        best = max(scores.items(), key=lambda item: item[1], default=(None, 0.0))
-        if best[1] > 0.0 and best[0] is not None:
-            mapping[cluster] = best[0]
-    unresolved = [cluster for cluster in clusters if cluster not in mapping]
-    if unresolved and live_turns:
-        for cluster in unresolved:
-            cluster_segments = [segment for segment in segments if segment.cluster == cluster]
-            scores: dict[str, float] = {}
-            for turn in live_turns:
-                if turn.speaker_id is None or turn.confidence < 0.5:
-                    continue
-                overlap = sum(
+        for person in people:
+            score = 0.0
+            intervals = enrollment_intervals.get(person, [])
+            if intervals:
+                ov = sum(
+                    _overlap(segment.start, segment.end, start, end)
+                    for segment in cluster_segments
+                    for start, end in intervals
+                )
+                score += 2.0 * (ov / enroll_totals[person])
+            if person in turn_totals:
+                t_ov = sum(
                     _overlap(segment.start, segment.end, turn.start, turn.end)
                     for segment in cluster_segments
+                    for turn in live_turns
+                    if turn.speaker_id == person and turn.confidence >= 0.48
                 )
-                scores[turn.speaker_id] = scores.get(turn.speaker_id, 0.0) + overlap
-            best = max(scores.items(), key=lambda item: item[1], default=(None, 0.0))
-            if best[0] is not None and best[1] > 0.0:
-                mapping[cluster] = best[0]
+                score += 1.0 * (t_ov / turn_totals[person])
+            pair_score[(cluster, person)] = score
+
+    # Find the highest-scoring 1-to-1 assignment (up to 4 speakers/clusters -> at most 24 perms).
+    mapping: dict[str, str] = {}
+    if len(clusters) <= len(people):
+        best_total = 0.0
+        for chosen_people in permutations(people, len(clusters)):
+            total = sum(pair_score[(cl, p)] for cl, p in zip(clusters, chosen_people))
+            if total > best_total:
+                best_total = total
+                mapping = {
+                    cl: p
+                    for cl, p in zip(clusters, chosen_people)
+                    if pair_score[(cl, p)] > 0.0
+                }
+    else:
+        best_total = 0.0
+        for chosen_clusters in permutations(clusters, len(people)):
+            total = sum(pair_score[(cl, p)] for cl, p in zip(chosen_clusters, people))
+            if total > best_total:
+                best_total = total
+                mapping = {
+                    cl: p
+                    for cl, p in zip(chosen_clusters, people)
+                    if pair_score[(cl, p)] > 0.0
+                }
+        for cl in clusters:
+            if cl not in mapping:
+                best = max(people, key=lambda p: pair_score[(cl, p)])
+                if pair_score[(cl, best)] > 0.0:
+                    mapping[cl] = best
     return mapping
 
 

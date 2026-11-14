@@ -4,6 +4,8 @@ import { MAX_PEOPLE, MIN_PEOPLE, addPerson, removePerson } from '../lib/people';
 import { ShapeGlyph } from '../lib/shape';
 import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
+import { MediaPipeBrowserVision } from '../vision/MediaPipeVision';
+import { sendVisionObservations } from '../vision/visionBridge';
 
 export function EnrollScreen() {
   const people = useRoundtableStore((state) => state.people);
@@ -20,6 +22,31 @@ export function EnrollScreen() {
   const lastLevelAt = useRef<number | undefined>(undefined);
   const currentId = enrollPrompt?.personId;
   const [recording, setRecording] = useState(false);
+  const enrollVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Track faces during enrollment so each speaker's name binds to the face whose mouth moves.
+  useEffect(() => {
+    const video = enrollVideoRef.current;
+    if (!live || !video) return;
+    const savedCameraId = (() => {
+      try {
+        return globalThis.localStorage?.getItem('roundtable.cameraId') ?? '';
+      } catch {
+        return '';
+      }
+    })();
+    const vision = new MediaPipeBrowserVision({
+      deviceId: savedCameraId || undefined,
+      numFaces: Math.min(4, Math.max(2, people.length)),
+      onObservations: (observations, atSeconds) => {
+        sendVisionObservations(observations, atSeconds, (message) => roundtableClient.send(message));
+      },
+    });
+    void vision.start(video).catch(() => {});
+    return () => {
+      vision.stop();
+    };
+  }, [live, people.length]);
   useEffect(() => {
     setRecording(false);
     setPromptStartedAt(useRoundtableStore.getState().sessionTime);
@@ -240,6 +267,16 @@ export function EnrollScreen() {
           </article>
         ))}
       </section>
+      {live ? (
+        <video
+          ref={enrollVideoRef}
+          style={{ position: 'fixed', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+          autoPlay
+          muted
+          playsInline
+          aria-hidden="true"
+        />
+      ) : null}
     </main>
   );
 }

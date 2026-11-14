@@ -86,6 +86,19 @@ def test_cluster_matching_by_enrollment_then_refine_and_split() -> None:
     assert result.turns[1].text.split() == ["three", "four"]
 
 
+def test_cluster_matching_stays_one_to_one_with_unequal_enrollment_and_bleed() -> None:
+    segments = [
+        SpeakerSegment(0.0, 5.0, "A"),
+        SpeakerSegment(6.0, 6.4, "A"),  # 0.4 s bleed into p2's long window
+        SpeakerSegment(6.5, 18.0, "B"),
+    ]
+    mapping = match_clusters_to_people(
+        segments,
+        {"p1": [(0.0, 5.0)], "p2": [(5.8, 18.0)]},
+    )
+    assert mapping == {"A": "p1", "B": "p2"}
+
+
 def test_same_speaker_pause_does_not_split_a_turn() -> None:
     from backend.app.models import Turn
     from backend.app.refine import SpeakerSegment, refine_turns

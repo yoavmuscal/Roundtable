@@ -244,16 +244,40 @@ def create_app(
     voice_ids = VoiceIdentifier(speakerkit_command(), session_dir / "voiceid") if mode == "live" and speakerkit_command() else None
 
     async def check_enrollment_voices(current: SessionEngine) -> None:
-        """Warn when two enrollment clips fall in the same SpeakerKit voice group."""
+        """Warn when two enrollment intervals fall in the same SpeakerKit voice group."""
+        import wave
+
+        from .voiceid import enrollment_collisions
+
+        command = speakerkit_command()
         monitor = app.state.audio_monitor
-        if voice_ids is None or monitor is None or len(current.people) < 2:
+        if not command or monitor is None or len(current.enrollment_intervals) < 2:
             return
+        now = current.clock()
+        pcm = pcm_between(monitor, monitor.started_wall_monotonic, current.started_monotonic + now)
+        if len(pcm) < 16_000 * 2 * 4:
+            return
+        workdir = session_dir / "voiceid"
+        workdir.mkdir(parents=True, exist_ok=True)
+        enroll_wav = workdir / "enroll_check.wav"
+        pad = b"\x00\x00" * (16_000 * 2)
+        with wave.open(str(enroll_wav), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(monitor.sample_rate)
+            handle.writeframes(pcm + pad)
         try:
-            groups = await voice_ids.alike_groups(current.enrollment_audio(monitor))
+            raw_segments = await SpeakerKitAdapter(command).diarize(
+                enroll_wav, speaker_count=len(current.enrollment_intervals)
+            )
         except Exception:
             return
         if current is not engine():
             return
+        offset = round(current.started_monotonic - monitor.started_wall_monotonic, 3)
+        shifted = [SpeakerSegment(seg.start - offset, seg.end - offset, seg.cluster) for seg in raw_segments]
+        regions = {person: intervals[-1] for person, intervals in current.enrollment_intervals.items() if intervals}
+        groups = enrollment_collisions(shifted, regions)
         if not groups:
             app.state.voice_warning = None
             return
@@ -270,23 +294,77 @@ def create_app(
             await broadcast(message)
 
     async def watch_voice() -> None:
-        """SpeakerKit on the last few seconds, folded into the mouth decision while speech is open."""
+        """Rolling full-context SpeakerKit pass for uncertain/covered-mouth turns.
+
+        PyAnnote's 10 s segmentation window is unstable in the last ~4 s of a
+        truncated WAV, so mouth+mic fusion owns the live edge while SpeakerKit
+        only settles turns that ended >= 4.2 s ago and had low mouth confidence.
+        """
+        import wave
+
+        command = speakerkit_command()
+        checked: set[str] = set()
         while True:
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(4.0)
             current = engine()
             monitor = app.state.audio_monitor
-            if voice_ids is None or monitor is None or current.phase != "live" or current.last_rms < 0.015:
+            if not command or monitor is None or current.phase != "live" or len(current.people) < 2:
                 continue
             now = current.clock()
-            clip = pcm_between(monitor, current.started_monotonic + now - 3.5, current.started_monotonic + now)
+            candidates = [
+                turn for turn in current.turns
+                if turn.id not in checked
+                and turn.confidence < 0.50
+                and turn.end <= now - 4.2
+                and turn.end - turn.start >= 0.8
+            ]
+            if not candidates:
+                continue
+            pcm = pcm_between(monitor, monitor.started_wall_monotonic, current.started_monotonic + now)
+            if len(pcm) < 16_000 * 2 * 8:
+                continue
+            workdir = session_dir / "voiceid"
+            workdir.mkdir(parents=True, exist_ok=True)
+            rolling_wav = workdir / "rolling.wav"
+            with wave.open(str(rolling_wav), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(monitor.sample_rate)
+                handle.writeframes(pcm)
             try:
-                match = await voice_ids.identify(current.enrollment_audio(monitor), clip)
+                raw_segments = await SpeakerKitAdapter(command).diarize(
+                    rolling_wav, speaker_count=len(current.people)
+                )
             except Exception:
                 continue
             if current is not engine() or current.phase != "live":
                 continue
-            if match.person_id and match.coverage >= 0.55:
-                await emit(current, current.steer_open_speaker(match.person_id, now, match.coverage))
+            offset = round(current.started_monotonic - monitor.started_wall_monotonic, 3)
+            settled = [
+                SpeakerSegment(seg.start - offset, seg.end - offset, seg.cluster)
+                for seg in raw_segments
+                if seg.end - offset <= now - 4.0
+            ]
+            cmap = match_clusters_to_people(settled, current.enrollment_intervals, current.turns)
+            if len(set(cmap.values())) < 2:
+                continue
+            for turn in candidates:
+                checked.add(turn.id)
+                cover: dict[str, float] = {}
+                for seg in settled:
+                    person = cmap.get(seg.cluster)
+                    if not person:
+                        continue
+                    ov = max(0.0, min(seg.end, turn.end + 0.3) - max(seg.start, turn.start - 0.5))
+                    if ov > 0.0:
+                        cover[person] = cover.get(person, 0.0) + ov
+                if not cover:
+                    continue
+                best_person, best_ov = max(cover.items(), key=lambda item: item[1])
+                share = best_ov / sum(cover.values())
+                if share >= 0.65 and best_ov >= 0.5:
+                    for outgoing in current.reassign_turn(turn.id, best_person, share):
+                        await broadcast(outgoing)
 
     async def warm_speakerkit() -> None:
         """SpeakerKit's first call loads its models (~14 s); do it during enrollment."""
@@ -597,6 +675,11 @@ def create_app(
                             current.set_enrolled_people(people)
                     except (json.JSONDecodeError, TypeError, KeyError):
                         pass
+                # If the last speaker recorded a sample and clicked Start live directly
+                # without clicking Next speaker first, save their voice clip before starting.
+                if current.phase == "enroll" and getattr(current, "enrollment_armed", False) and current.people:
+                    cursor = min(getattr(app.state, "enroll_cursor", 0), len(current.people) - 1)
+                    current.take_enrollment_sample(current.people[cursor]["id"], current.clock())
                 if current.calibration is None:
                     current.set_calibration(Calibration(FAKE_CORNERS, FAKE_TABLE))
                 if is_default_calibration(current.calibration):

@@ -64,6 +64,20 @@ def test_fusion_chewing_in_silence_is_ambiguous() -> None:
     assert result.speaker_id is None or result.dashed or result.reason != "clear"
 
 
+def test_fusion_handles_syllable_dips_against_smoothed_mouth_score() -> None:
+    """Real mic RMS dips between syllables while 0.6s jawOpen std-dev stays elevated."""
+    fusion = SpeakerFusion()
+    rms_pattern = (0.045, 0.007, 0.052, 0.006, 0.048, 0.008, 0.041, 0.009)
+    for idx, rms in enumerate(rms_pattern):
+        t = idx * 0.1
+        fusion.add_level(t, rms)
+        fusion.add_sample(t, "p1", 0.0)
+        fusion.add_sample(t, "p2", 0.42)
+    result = fusion.attribute(0.0, 0.7)
+    assert result.speaker_id == "p2"
+    assert result.reason == "clear"
+
+
 def test_voice_hint_inside_the_sentence_can_break_a_tie() -> None:
     fusion = SpeakerFusion()
     for t in (0.0, 0.1, 0.2, 0.3, 0.4, 0.5):

@@ -26,6 +26,32 @@ BLOCK_LINE_RE = re.compile(r"^(Confirmed segment|Unconfirmed segment|Current tex
 CONFIRMED_RE = re.compile(r"^(?:final|confirmed|stable)\s*[:\]]\s*", re.IGNORECASE)
 
 
+def _strip_already_flushed(flushed: list[str], words: tuple[str, ...]) -> tuple[str, ...]:
+    """Drop words from `words` that were already emitted by an earlier silence flush."""
+    if not flushed or not words:
+        return words
+    matched = 0
+    for f_word, w_word in zip(flushed, words):
+        if _norm(f_word) != _norm(w_word):
+            break
+        matched += 1
+    if matched == len(flushed):
+        return words[matched:]
+    # Whisper often revises one word mid-sentence ("enunciate" -> "eat non-ca").
+    # Look for the tail of `flushed` inside `words` so we only emit words after it.
+    for tail_len in (3, 2):
+        if len(flushed) >= tail_len:
+            tail = [_norm(w) for w in flushed[-tail_len:]]
+            norm_words = [_norm(w) for w in words]
+            limit = min(len(norm_words) - tail_len + 1, len(flushed) + 5)
+            for idx in range(max(0, matched), max(0, limit)):
+                if norm_words[idx : idx + tail_len] == tail:
+                    return words[idx + tail_len :]
+    if matched >= 2:
+        return words[min(len(words), len(flushed)) :]
+    return words[matched:]
+
+
 @dataclass(frozen=True, slots=True)
 class TranscriptCommit:
     words: tuple[str, ...]
@@ -120,21 +146,21 @@ class StreamingTranscriptParser:
         self._segments_seen = len(confirmed_raw)
         new_words = tuple(" ".join(new_segments).split())
         if new_words and self._flushed:
-            # Skip what the silence flush already showed, if Argmax confirmed it the same way.
-            matched = 0
-            for flushed, confirmed in zip(self._flushed, new_words):
-                if _norm(flushed) != _norm(confirmed):
-                    break
-                matched += 1
-            new_words = new_words[matched:]
+            new_words = _strip_already_flushed(self._flushed, new_words)
             self._flushed = []
         commits: list[TranscriptCommit] = []
         pending = " ".join(item for item in unconfirmed if item) or current
-        partial = tuple(pending.split())
+        raw_partial = tuple(pending.split())
+        partial = _strip_already_flushed(self._flushed, raw_partial) if self._flushed else raw_partial
         if new_words:
             self.committed_words.extend(new_words)
-            spoken_start = self._speech_start if self._speech_start is not None else time_s
             spoken_end = self._speech_last if self._speech_last is not None else time_s
+            spoken_start = self._speech_start if self._speech_start is not None else None
+            # When Argmax confirms a phrase directly or after a flush, reach back across
+            # the natural speaking duration (~3 words/s) so mouth fusion sees the speaker.
+            estimated_span = max(0.9, min(6.0, len(new_words) * 0.32))
+            if spoken_start is None or spoken_end - spoken_start < 0.6:
+                spoken_start = max(0.0, spoken_end - estimated_span)
             commits.append(TranscriptCommit(new_words, time_s, True, spoken_start, max(spoken_start, spoken_end)))
             # Anything still unconfirmed was said after the words just confirmed.
             self._speech_start = spoken_end if partial else None
@@ -186,6 +212,10 @@ class StreamingTranscriptParser:
         self.previous_words = tuple(self.committed_words)
         self.last_update = now_s
         spoken_start, spoken_end = self._speech_start, self._speech_last
+        if spoken_end is None:
+            spoken_end = now_s
+        if spoken_start is None or spoken_end - spoken_start < 0.6:
+            spoken_start = max(0.0, spoken_end - max(0.9, min(6.0, len(words) * 0.32)))
         if self.block_mode:
             self._flushed.extend(words)
             self._speech_start = None

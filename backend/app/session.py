@@ -411,9 +411,15 @@ class SessionEngine:
 
     def _live_partial_caption(self, time_s: float) -> dict[str, Any]:
         """Show still-changing words immediately so the bubble appears while someone talks."""
-        start = self.turn_builder.current_start if self.turn_builder.current_start is not None else time_s
-        attribution = self.fusion.attribute(max(0.0, start - 0.2), time_s)
-        speaker = self._named_speaker(self.turn_builder.current_speaker or attribution.speaker_id, time_s)
+        speech_start = getattr(self.transcript, "_speech_start", None)
+        start = speech_start if speech_start is not None else (self.turn_builder.current_start if self.turn_builder.current_start is not None else max(0.0, time_s - 1.2))
+        attribution = self.fusion.attribute(max(0.0, start - 0.25), time_s)
+        # Let a clear mouth/voice match override an earlier tentative guess on the open turn.
+        if attribution.reason == "clear" and attribution.speaker_id is not None:
+            raw_speaker = attribution.speaker_id
+        else:
+            raw_speaker = attribution.speaker_id or self.turn_builder.current_speaker
+        speaker = self._named_speaker(raw_speaker, time_s)
         if speaker:
             self.caption_speaker, self.caption_speaker_at = speaker, time_s
         words = list(self.turn_builder.current_words) + list(self.transcript.partial_words)
@@ -423,7 +429,7 @@ class SessionEngine:
             turnId=turn_id(self.turn_builder.sequence + 1),
             speakerId=speaker,
             text=" ".join(words),
-            start=start,
+            start=self.turn_builder.current_start if self.turn_builder.current_start is not None else start,
             end=time_s,
             partial=True,
             confidence=attribution.confidence,
@@ -606,9 +612,20 @@ class SessionEngine:
             return visible
         if self.active_speaker in enrolled:
             return self.active_speaker
-        recent = [hint for hint in self.fusion.voice_hints if time_s - 4.0 <= hint.time <= time_s + 0.3]
+        recent = [hint for hint in self.fusion.voice_hints if time_s - 5.0 <= hint.time <= time_s + 0.4]
         if recent and recent[-1].person_id in enrolled:
             return recent[-1].person_id
+        mouth_recent = {
+            pid: val
+            for pid, val in self.fusion.mean_mouth(max(0.0, time_s - 2.0), time_s).items()
+            if pid in enrolled
+        }
+        if mouth_recent:
+            best_pid, best_val = max(mouth_recent.items(), key=lambda item: item[1])
+            if best_val >= 0.03:
+                return best_pid
+        if self.fusion.previous_speaker in enrolled:
+            return self.fusion.previous_speaker
         present = [
             track for track in self.tracker.tracks.values()
             if track.id in enrolled and track.state != "away"

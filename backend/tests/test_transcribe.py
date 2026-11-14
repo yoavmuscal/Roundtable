@@ -100,6 +100,30 @@ def test_argmax_block_partials_and_silence_flush() -> None:
     assert parser.committed_words == ["Hello", "there"]
 
 
+def test_argmax_flush_does_not_repeat_when_whisper_revises_unconfirmed_words() -> None:
+    parser = StreamingTranscriptParser()
+    first = (
+        "---\nUnconfirmed segment: <|0.00|> I am talking do I have to really enunciate what I say<|4.0|>\n"
+        "Current text: \n"
+    )
+    parser.feed_chunk(first, 1.0)
+    flushed = parser.flush_due(3.5)
+    assert flushed is not None
+    # Next stream block extends the unconfirmed line and slightly rewrites one word.
+    extended = (
+        "---\nUnconfirmed segment: <|0.00|> I am talking do I have to really eat non ca what I say during the demo<|6.0|>\n"
+        "Current text: \n"
+    )
+    assert parser.feed_chunk(extended, 4.0) == []
+    assert parser.partial_words == ("during", "the", "demo")
+    confirmed = (
+        "---\nConfirmed segment: <|0.00|> I am talking do I have to really eat non ca what I say during the demo<|6.0|>\n"
+        "Current text: \n"
+    )
+    commits = parser.feed_chunk(confirmed, 5.0)
+    assert [w for c in commits for w in c.words] == ["during", "the", "demo"]
+
+
 def test_clean_whisper_text_strips_tokens_and_non_speech() -> None:
     from backend.app.transcribe import clean_whisper_text
 

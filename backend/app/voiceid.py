@@ -1,15 +1,15 @@
 """Live voice ID with Argmax SpeakerKit (open source).
 
-After a caption turn finishes, the turn's audio is placed after each person's enrollment
-sample in one short WAV and diarized with `argmax-cli diarize`. The cluster each
-enrollment sample falls into names that cluster; the turn takes the person whose cluster
-covers most of it. This identifies speakers by voice, so it works when a mouth is
-covered or off camera. A call takes about 0.5 s once the model is warm.
+Concatenates equal-length, voiced enrollment clips for each speaker plus a live
+speech clip into one short WAV and diarizes with `argmax-cli diarize`. Keeping
+enrollment clips balanced in duration prevents VBx clustering from collapsing a
+shorter voice into a longer enrollment cluster.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,8 +18,8 @@ from .refine import SpeakerSegment, parse_speakerkit_output
 
 SAMPLE_RATE = 16_000
 GAP_S = 0.4
-MAX_ENROLL_S = 12.0
-MAX_TURN_S = 10.0
+TARGET_ENROLL_S = 5.5
+MAX_TURN_S = 8.0
 MIN_CLIP_S = 1.0
 
 
@@ -33,6 +33,72 @@ def _overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
 
 
+def trim_voiced_clip(pcm: bytes, target_s: float = TARGET_ENROLL_S) -> bytes:
+    """Keep the loudest contiguous `target_s` window and strip leading/trailing silence."""
+    frame_bytes = int(0.1 * SAMPLE_RATE) * 2  # 100 ms frames
+    if len(pcm) <= frame_bytes * 2:
+        return pcm
+    energies: list[float] = []
+    for offset in range(0, len(pcm) - frame_bytes + 1, frame_bytes):
+        chunk = pcm[offset : offset + frame_bytes]
+        count = len(chunk) // 2
+        sq = 0
+        for i in range(0, count * 2, 2):
+            val = int.from_bytes(chunk[i : i + 2], "little", signed=True)
+            sq += val * val
+        energies.append(math.sqrt(sq / max(1, count)) / 32768.0)
+    if not energies:
+        return pcm
+    peak = max(energies)
+    floor = max(0.008, peak * 0.15)
+    voiced_idx = [idx for idx, rms in enumerate(energies) if rms >= floor]
+    if voiced_idx:
+        first = max(0, voiced_idx[0] - 1)
+        last = min(len(energies), voiced_idx[-1] + 2)
+        pcm = pcm[first * frame_bytes : last * frame_bytes]
+    target_bytes = int(target_s * SAMPLE_RATE) * 2
+    if len(pcm) <= target_bytes:
+        return pcm
+    # Slide a target_s window to pick the most voiced stretch.
+    win_frames = max(1, int(round(target_s / 0.1)))
+    sub_energies: list[float] = []
+    for offset in range(0, len(pcm) - frame_bytes + 1, frame_bytes):
+        chunk = pcm[offset : offset + frame_bytes]
+        count = len(chunk) // 2
+        sq = 0
+        for i in range(0, count * 2, 2):
+            val = int.from_bytes(chunk[i : i + 2], "little", signed=True)
+            sq += val * val
+        sub_energies.append(sq)
+    if len(sub_energies) <= win_frames:
+        return pcm[:target_bytes]
+    best_start = max(
+        range(len(sub_energies) - win_frames + 1),
+        key=lambda start: sum(sub_energies[start : start + win_frames]),
+    )
+    return pcm[best_start * frame_bytes : best_start * frame_bytes + target_bytes]
+
+
+def _balance_enrollment_clips(enrollment: dict[str, bytes]) -> dict[str, bytes]:
+    """Trim each person's sample to its voiced core and match durations so VBx stays fair."""
+    trimmed = {
+        person: trim_voiced_clip(pcm, TARGET_ENROLL_S)
+        for person, pcm in enrollment.items()
+        if len(pcm) >= MIN_CLIP_S * SAMPLE_RATE * 2
+    }
+    trimmed = {
+        person: pcm
+        for person, pcm in trimmed.items()
+        if len(pcm) >= MIN_CLIP_S * SAMPLE_RATE * 2
+    }
+    if len(trimmed) < 2:
+        return trimmed
+    shortest = min(len(pcm) for pcm in trimmed.values())
+    # Cap every clip to at most 1.35x the shortest clip so one long sample never dominates VBx.
+    cap = max(int(2.5 * SAMPLE_RATE) * 2, int(shortest * 1.35) // 2 * 2)
+    return {person: trim_voiced_clip(pcm, cap / 2 / SAMPLE_RATE) for person, pcm in trimmed.items()}
+
+
 def _cluster_of_region(segments: list[SpeakerSegment], start: float, end: float) -> str | None:
     cover: dict[str, float] = {}
     for segment in segments:
@@ -40,7 +106,7 @@ def _cluster_of_region(segments: list[SpeakerSegment], start: float, end: float)
     if not cover:
         return None
     cluster, amount = max(cover.items(), key=lambda item: item[1])
-    if amount < 0.4 * max(0.01, end - start):
+    if amount < 0.35 * max(0.01, end - start):
         return None
     return cluster
 
@@ -70,7 +136,7 @@ def match_turn(
         if not cover:
             continue
         cluster, amount = max(cover.items(), key=lambda item: item[1])
-        if amount >= 0.4 * (end - start):
+        if amount >= 0.35 * (end - start):
             cluster_of[person_id] = cluster
     clusters = list(cluster_of.values())
     if len(set(clusters)) != len(clusters) or len(clusters) < 2:
@@ -95,11 +161,7 @@ class VoiceIdentifier:
 
     async def alike_groups(self, enrollment: dict[str, bytes]) -> list[list[str]]:
         """SpeakerKit on the enrollment clips. Groups that share one voice cluster."""
-        clips = {
-            person: pcm[-int(MAX_ENROLL_S * SAMPLE_RATE) * 2 :]
-            for person, pcm in enrollment.items()
-            if len(pcm) >= MIN_CLIP_S * SAMPLE_RATE * 2
-        }
+        clips = _balance_enrollment_clips(enrollment)
         if len(clips) < 2:
             return []
         async with self.lock:
@@ -109,8 +171,8 @@ class VoiceIdentifier:
         return enrollment_collisions(segments, regions)
 
     async def identify(self, enrollment: dict[str, bytes], turn_pcm: bytes) -> VoiceMatch:
-        clips = {person: pcm[-int(MAX_ENROLL_S * SAMPLE_RATE) * 2:] for person, pcm in enrollment.items() if len(pcm) >= MIN_CLIP_S * SAMPLE_RATE * 2}
-        turn_pcm = turn_pcm[-int(MAX_TURN_S * SAMPLE_RATE) * 2:]
+        clips = _balance_enrollment_clips(enrollment)
+        turn_pcm = trim_voiced_clip(turn_pcm[-int(MAX_TURN_S * SAMPLE_RATE) * 2 :], MAX_TURN_S)
         if len(clips) < 2 or len(turn_pcm) < MIN_CLIP_S * SAMPLE_RATE * 2:
             return VoiceMatch(None, 0.0)
         async with self.lock:
