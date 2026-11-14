@@ -28,6 +28,13 @@ class LevelSample:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceHint:
+    time: float
+    person_id: str
+    coverage: float
+
+
+@dataclass(frozen=True, slots=True)
 class Attribution:
     speaker_id: str | None
     confidence: float
@@ -61,6 +68,7 @@ class SpeakerFusion:
         self.thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
         self.samples: list[MouthSample] = []
         self.levels: list[LevelSample] = []
+        self.voice_hints: list[VoiceHint] = []
         self.previous_speaker: str | None = None
         self.previous_end: float | None = None
 
@@ -76,10 +84,17 @@ class SpeakerFusion:
         cutoff = time_s - 120.0
         self.levels = [sample for sample in self.levels if sample.time >= cutoff]
 
+    def add_voice(self, time_s: float, person_id: str, coverage: float) -> None:
+        """A SpeakerKit hit for audio around time_s. Ignored once that moment has ended."""
+        self.voice_hints.append(VoiceHint(time_s, person_id, max(0.0, min(1.0, coverage))))
+        cutoff = time_s - 120.0
+        self.voice_hints = [hint for hint in self.voice_hints if hint.time >= cutoff]
+
     def relabel(self, a: str, b: str) -> None:
         """Swap two person ids in the stored mouth history (after a track is renamed)."""
         swap = {a: b, b: a}
         self.samples = [MouthSample(item.time, swap.get(item.person_id, item.person_id), item.score) for item in self.samples]
+        self.voice_hints = [VoiceHint(item.time, swap.get(item.person_id, item.person_id), item.coverage) for item in self.voice_hints]
 
     def mean_mouth(self, start_s: float, end_s: float) -> dict[str, float]:
         totals: dict[str, list[float]] = {}
@@ -158,9 +173,21 @@ class SpeakerFusion:
             scores[person] = max(0.0, min(1.0, scores[person]))
         return scores
 
+    def _with_voice(self, scores: dict[str, float], start_s: float, end_s: float) -> dict[str, float]:
+        """Blend a voice hit that landed inside this speech window. Later hits do not apply."""
+        hints = [hint for hint in self.voice_hints if start_s <= hint.time <= end_s]
+        if not hints:
+            return scores
+        hint = hints[-1]
+        blended = dict(scores)
+        mouth = blended.get(hint.person_id, 0.0)
+        voice_score = 0.35 + 0.5 * hint.coverage
+        blended[hint.person_id] = min(1.0, 0.5 * mouth + 0.5 * voice_score)
+        return blended
+
     def attribute(self, start_s: float, end_s: float) -> Attribution:
         window_start = start_s - 0.2
-        averages = self.fused_scores(window_start, end_s)
+        averages = self._with_voice(self.fused_scores(window_start, end_s), window_start, end_s)
         if not averages:
             return Attribution(None, 0.0, reason="no_samples")
         ranked = sorted(averages.items(), key=lambda item: item[1], reverse=True)

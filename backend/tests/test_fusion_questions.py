@@ -64,6 +64,26 @@ def test_fusion_chewing_in_silence_is_ambiguous() -> None:
     assert result.speaker_id is None or result.dashed or result.reason != "clear"
 
 
+def test_voice_hint_inside_the_sentence_can_break_a_tie() -> None:
+    fusion = SpeakerFusion()
+    for t in (0.0, 0.1, 0.2, 0.3, 0.4, 0.5):
+        fusion.add_sample(t, "covered", 0.2)
+        fusion.add_sample(t, "other", 0.22)
+    fusion.add_voice(0.3, "covered", 0.9)
+    assert fusion.attribute(0.0, 0.5).speaker_id == "covered"
+
+
+def test_voice_hint_after_the_sentence_does_not_relabel_it() -> None:
+    fusion = SpeakerFusion()
+    for t in (0.0, 0.1, 0.2):
+        fusion.add_sample(t, "p1", 0.8)
+        fusion.add_sample(t, "p2", 0.1)
+    fusion.add_voice(4.0, "p2", 0.95)
+    result = fusion.attribute(0.0, 0.2)
+    assert result.speaker_id == "p1"
+    assert result.reason == "clear"
+
+
 def test_glow_needs_sound_and_hysteresis() -> None:
     gate = ActiveSpeakerGate()
     assert gate.update(0.0, "p1", 0.0) is None

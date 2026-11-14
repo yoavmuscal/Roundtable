@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .audio import MicrophoneLevelMonitor
+from .audio import MicrophoneLevelMonitor, pcm_between
 from .bonsai import BonsaiWorker, MockBonsaiClient, RealBonsaiClient
 from .calibration import Calibration, CalibrationError, calibration_from_payload
 from .contract import CONTRACT_VERSION, MessageValidationError, validate_browser_message
@@ -160,6 +160,7 @@ def create_app(
     app.state.sim_task = None
     app.state.transcriber_task = None
     app.state.tick_task = None
+    app.state.voice_task = None
     app.state.transcriber_state = "off"  # off | loading | listening
     app.state.audio_monitor = None
     app.state.warmed = False
@@ -238,19 +239,6 @@ def create_app(
 
     voice_ids = VoiceIdentifier(speakerkit_command(), session_dir / "voiceid") if mode == "live" and speakerkit_command() else None
 
-    async def voice_check(current: SessionEngine, turn_id_: str) -> None:
-        """Re-check a finished caption's speaker by voice (works with covered mouths)."""
-        monitor = app.state.audio_monitor
-        if voice_ids is None or monitor is None or len(current.people) < 2:
-            return
-        try:
-            match = await voice_ids.identify(current.enrollment_audio(monitor), current.turn_audio(monitor, turn_id_))
-        except Exception:
-            return
-        if match.person_id and match.coverage >= 0.6 and current is engine():
-            for message in current.reassign_turn(turn_id_, match.person_id, match.coverage):
-                await broadcast(message)
-
     async def check_enrollment_voices(current: SessionEngine) -> None:
         """Warn when two enrollment clips fall in the same SpeakerKit voice group."""
         monitor = app.state.audio_monitor
@@ -276,13 +264,26 @@ def create_app(
     async def emit(current: SessionEngine, messages: list[dict[str, Any]]) -> None:
         for message in messages:
             await broadcast(message)
-            if (
-                message.get("type") == "caption"
-                and not message.get("partial")
-                and not message.get("voiceId")
-                and float(message.get("end", 0)) - float(message.get("start", 0)) >= 0.8
-            ):
-                asyncio.create_task(voice_check(current, str(message.get("turnId"))))
+
+    async def watch_voice() -> None:
+        """SpeakerKit on the last few seconds, folded into the mouth decision while speech is open."""
+        while True:
+            await asyncio.sleep(2.0)
+            current = engine()
+            monitor = app.state.audio_monitor
+            if voice_ids is None or monitor is None or current.phase != "live" or current.last_rms < 0.015:
+                continue
+            now = current.clock()
+            clip = pcm_between(monitor, current.started_monotonic + now - 3.5, current.started_monotonic + now)
+            try:
+                match = await voice_ids.identify(current.enrollment_audio(monitor), clip)
+            except Exception:
+                continue
+            if current is not engine() or current.phase != "live":
+                continue
+            if match.person_id and match.coverage >= 0.55:
+                # Stamp the middle of the clip so a result that arrives after the sentence cannot relabel it.
+                current.fusion.add_voice(now - 1.75, match.person_id, match.coverage)
 
     async def warm_speakerkit() -> None:
         """SpeakerKit's first call loads its models (~14 s); do it during enrollment."""
@@ -502,7 +503,7 @@ def create_app(
                 await broadcast(SessionEngine._message(current.clock(), "status", **current_status()))
 
     async def stop_live_tasks(stop_audio: bool = True) -> None:
-        for name in ("tick_task",):
+        for name in ("tick_task", "voice_task"):
             task = getattr(app.state, name)
             if task is not None and not task.done():
                 task.cancel()
@@ -605,6 +606,9 @@ def create_app(
                     current.recording_offsets["audioS"] = round(current.started_monotonic - monitor.started_wall_monotonic, 3)
                 ensure_transcriber()
                 app.state.tick_task = asyncio.create_task(live_ticker())
+                voice_task = app.state.voice_task
+                if voice_task is None or voice_task.done():
+                    app.state.voice_task = asyncio.create_task(watch_voice())
         elif action == "stop":
             if mode == "live" and current.phase != "live":
                 return  # a second Stop click must not run refine twice
