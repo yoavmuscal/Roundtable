@@ -48,7 +48,7 @@ def test_replay_websocket_answers_ping_and_streams(tmp_path: Path) -> None:
     with client.websocket_connect("/ws?speed=1000") as socket:
         first = socket.receive_json()
         assert first["type"] == "replay"
-        socket.send_json({"type": "ping", "sentAt": 12.5, "sequence": 1})
+        socket.send_json({"type": "ping", "nonce": "12.5:1", "sentAt": 12.5})
         replies = [socket.receive_json() for _ in range(20)]
-        assert any(item["type"] == "pong" and item["sequence"] == 1 for item in replies)
+        assert any(item["type"] == "pong" and item["nonce"] == "12.5:1" for item in replies)
         assert any(item["type"] == "phase" for item in replies)

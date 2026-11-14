@@ -1,75 +1,57 @@
-"""Shared Roundtable WebSocket message contract.
+"""Backend constants and validation for the shared external contract.
 
-Keep this file byte-for-byte aligned semantically with web/src/lib/contract.ts.
-Any change must update both copies in the same commit.
+The canonical mirrors are backend/contract.py and src/contract.ts. This module
+only adds backend-side validation and constants used by the Python engine.
 """
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
-CONTRACT_VERSION = 1
+from backend.contract import CONTRACT_VERSION, DEFAULT_PEOPLE
 
 PERSON_IDS = ("p1", "p2", "p3", "p4")
 TURN_ID_FORMAT = "turn_{sequence:04d}"
 
-BROWSER_MESSAGE_TYPES = frozenset(
-    {
-        "hello",       # {client, version}
-        "ping",        # {sentAt, sequence}
-        "calibrate",   # {corners[4], tableSize, centerClick}
-        "faces",       # {time, people: FaceObservation[]}
-        "control",     # {action, ...}
-        "ask",         # {text}
-        "seat_drag",   # {personId, position}
-    }
-)
-
+BROWSER_MESSAGE_TYPES = frozenset({"hello", "ping", "calibrate", "faces", "control", "ask", "seat-drag"})
 BACKEND_MESSAGE_TYPES = frozenset(
     {
         "replay",
         "pong",
-        "calibration_result",
+        "calibration",
         "people",
-        "enroll_prompt",
-        "people_frame",
+        "enroll-prompt",
+        "people-frame",
         "level",
         "caption",
-        "active_speaker",
+        "active-speaker",
         "tags",
         "map",
         "stats",
         "status",
         "answer",
         "phase",
-        "refine_progress",
+        "refine-progress",
         "refined",
         "error",
     }
 )
-
 CONTROL_ACTIONS = frozenset(
     {
         "start",
         "stop",
-        "enroll_next",
-        "enroll_redo",
-        "enroll_skip",
-        "ask_begin",
-        "ask_end",
+        "enroll-next",
+        "enroll-redo",
+        "enroll-skip",
+        "ask-begin",
+        "ask-end",
         "recalibrate",
-        "confirm_seats",
+        "confirm-seats",
     }
 )
-
-PHASES = ("setup", "enroll", "live", "refine", "review")
-
-SPEAKERS = (
-    {"id": "p1", "color": "#8B7CF6", "shape": "circle"},
-    {"id": "p2", "color": "#2DD4A7", "shape": "square"},
-    {"id": "p3", "color": "#F5A524", "shape": "diamond"},
-    {"id": "p4", "color": "#F472B6", "shape": "triangle"},
+PHASES = ("setup", "enroll", "live", "review")
+SPEAKERS = tuple(DEFAULT_PEOPLE) + (
+    {"id": "p4", "name": "Speaker 4", "aliases": [], "color": "#F472B6", "shape": "triangle"},
 )
 
 DEFAULT_THRESHOLDS: dict[str, float] = {
@@ -100,26 +82,13 @@ def turn_id(sequence: int) -> str:
     return TURN_ID_FORMAT.format(sequence=sequence)
 
 
-def make_message(message_type: str, **payload: Any) -> dict[str, Any]:
-    """Create a backend message with version and backend timestamp."""
-    if message_type not in BACKEND_MESSAGE_TYPES:
-        raise MessageValidationError(f"unknown backend message type: {message_type}")
-    return {
-        "type": message_type,
-        "version": CONTRACT_VERSION,
-        "time": payload.pop("time", time.monotonic()),
-        **payload,
-    }
-
-
 def validate_browser_message(message: dict[str, Any]) -> dict[str, Any]:
     message_type = message.get("type")
     if message_type not in BROWSER_MESSAGE_TYPES:
         raise MessageValidationError(f"unknown browser message type: {message_type!r}")
-    version = message.get("version", CONTRACT_VERSION)
-    if version != CONTRACT_VERSION:
+    if message_type == "hello" and message.get("version") != CONTRACT_VERSION:
         raise MessageValidationError(
-            f"unsupported contract version {version!r}; expected {CONTRACT_VERSION}"
+            f"unsupported contract version {message.get('version')!r}; expected {CONTRACT_VERSION}"
         )
     if message_type == "control" and message.get("action") not in CONTROL_ACTIONS:
         raise MessageValidationError(f"unknown control action: {message.get('action')!r}")

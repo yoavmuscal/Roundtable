@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .contract import CONTRACT_VERSION
+from .ui_adapter import internal_to_ui
 
 
 class ReplaySession:
@@ -35,11 +36,9 @@ class ReplaySession:
     def replay_message(self) -> dict[str, Any]:
         return {
             "type": "replay",
-            "version": CONTRACT_VERSION,
-            "time": 0.0,
             "session": self.metadata.get("name", self.session_dir.name),
-            "durationS": self.metadata.get("durationS"),
             "videoUrl": "/video" if self.video_path and self.video_path.exists() else None,
+            "speed": 1.0,
         }
 
 
@@ -84,10 +83,8 @@ def create_app(session_dir: Path) -> FastAPI:
                         await websocket.send_json(
                             {
                                 "type": "pong",
-                                "version": CONTRACT_VERSION,
-                                "time": clock,
-                                "sentAt": message.get("sentAt"),
-                                "sequence": message.get("sequence"),
+                                "nonce": str(message.get("nonce", "")),
+                                "backendTime": clock,
                             }
                         )
                     elif message.get("type") == "hello":
@@ -103,7 +100,9 @@ def create_app(session_dir: Path) -> FastAPI:
                 event_time = float(item.get("time", 0.0))
                 await asyncio.sleep(max(0.0, event_time - previous_time) / speed)
                 clock = event_time
-                await websocket.send_json(item)
+                external = internal_to_ui(item)
+                if external is not None:
+                    await websocket.send_json(external)
                 previous_time = event_time
         except WebSocketDisconnect:
             pass

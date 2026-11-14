@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
-from ctypes import Structure, c_ulonglong
+from ctypes import Structure, c_ulong, c_ulonglong, sizeof
 from typing import Any
 
 
@@ -12,8 +12,8 @@ def memory_status() -> dict[str, float | None]:
     if platform.system() == "Windows":
         class MemoryStatus(Structure):
             _fields_ = [
-                ("length", c_ulonglong),
-                ("memory_load", c_ulonglong),
+                ("length", c_ulong),
+                ("memory_load", c_ulong),
                 ("total_physical", c_ulonglong),
                 ("available_physical", c_ulonglong),
                 ("total_page_file", c_ulonglong),
@@ -26,8 +26,9 @@ def memory_status() -> dict[str, float | None]:
         from ctypes import windll
 
         status = MemoryStatus()
-        status.length = 88
-        windll.kernel32.GlobalMemoryStatusEx(status)
+        status.length = sizeof(MemoryStatus)
+        if not windll.kernel32.GlobalMemoryStatusEx(status):
+            return {"ramGb": None, "ramTotalGb": None}
         total = float(status.total_physical) / 1e9
         available = float(status.available_physical) / 1e9
         return {"ramGb": round(total - available, 2), "ramTotalGb": round(total, 2)}

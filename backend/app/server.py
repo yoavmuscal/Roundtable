@@ -23,6 +23,7 @@ from .session import SessionEngine
 from .simulation import create_simulation_engine, run_simulation
 from .status import status_message
 from .transcribe import ArgmaxTranscriberAdapter
+from .ui_adapter import browser_to_internal, internal_to_ui
 
 
 class ConnectionManager:
@@ -80,7 +81,9 @@ def create_app(
     app.state.transcriber_task = None
 
     async def broadcast(message: dict[str, Any]) -> None:
-        await manager.broadcast(message)
+        external = internal_to_ui(message)
+        if external is not None:
+            await manager.broadcast(external)
 
     def engine() -> SessionEngine:
         return app.state.engine
@@ -159,37 +162,24 @@ def create_app(
         await manager.connect(websocket)
         try:
             while True:
-                message = validate_browser_message(await websocket.receive_json())
+                message = browser_to_internal(validate_browser_message(await websocket.receive_json()))
                 message_type = message["type"]
                 current = engine()
                 if message_type == "hello":
-                    await websocket.send_json(
-                        {
-                            "type": "phase",
-                            "version": CONTRACT_VERSION,
-                            "time": current.clock(),
-                            "phase": current.phase,
-                        }
-                    )
-                    await websocket.send_json(
-                        {
-                            "type": "people",
-                            "version": CONTRACT_VERSION,
-                            "time": current.clock(),
-                            "people": current.people,
-                        }
-                    )
-                    await websocket.send_json(
-                        {"type": "status", "version": CONTRACT_VERSION, "time": current.clock(), **(await status())}
-                    )
+                    for outgoing in (
+                        {"type": "phase", "time": current.clock(), "phase": current.phase},
+                        {"type": "people", "time": current.clock(), "people": current.people},
+                        {"type": "status", "time": current.clock(), **(await status())},
+                    ):
+                        external = internal_to_ui(outgoing)
+                        if external is not None:
+                            await websocket.send_json(external)
                 elif message_type == "ping":
                     await websocket.send_json(
                         {
                             "type": "pong",
-                            "version": CONTRACT_VERSION,
-                            "time": current.clock(),
-                            "sentAt": message.get("sentAt"),
-                            "sequence": message.get("sequence"),
+                            "nonce": str(message.get("nonce", "")),
+                            "backendTime": current.clock(),
                         }
                     )
                 elif message_type == "calibrate":
@@ -197,13 +187,14 @@ def create_app(
                         calibration = calibration_from_payload(message)
                     except CalibrationError as exc:
                         await websocket.send_json(
-                            {
-                                "type": "calibration_result",
-                                "version": CONTRACT_VERSION,
-                                "time": current.clock(),
-                                "ok": False,
-                                "message": str(exc),
-                            }
+                            internal_to_ui(
+                                {
+                                    "type": "calibration_result",
+                                    "time": current.clock(),
+                                    "ok": False,
+                                    "message": str(exc),
+                                }
+                            )
                         )
                     else:
                         await broadcast(current.set_calibration(calibration))
@@ -224,9 +215,11 @@ def create_app(
         except WebSocketDisconnect:
             pass
         except MessageValidationError as exc:
-            await websocket.send_json(
-                {"type": "error", "version": CONTRACT_VERSION, "time": engine().clock(), "code": "contract", "message": str(exc)}
+            external = internal_to_ui(
+                {"type": "error", "time": engine().clock(), "code": "contract", "message": str(exc)}
             )
+            if external is not None:
+                await websocket.send_json(external)
         finally:
             await manager.disconnect(websocket)
 

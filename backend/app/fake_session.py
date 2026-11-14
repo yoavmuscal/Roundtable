@@ -178,7 +178,7 @@ def generate_session(output_dir: Path, include_video: bool = True) -> dict[str, 
         proposed = f"p{active_index + 1}" if active_index is not None else None
         active = active_gate.update(time_s, proposed, rms)
         if active != last_active:
-            events.append(event(time_s, "active_speaker", personId=active))
+            events.append(event(time_s, "active_speaker", personId=active, confidence=0.9 if active else 0.0))
             last_active = active
         if active_turn and abs(time_s * 5 - round(time_s * 5)) < 1e-6:
             x, _, _ = person_position(active_index, time_s)
@@ -234,6 +234,8 @@ def generate_session(output_dir: Path, include_video: bool = True) -> dict[str, 
                     turnId=turn.id,
                     speakerId=speaker_id,
                     text=" ".join(cumulative),
+                    start=spec.start,
+                    end=word_time,
                     partial=True,
                     confidence=attribution.confidence,
                 )
@@ -247,6 +249,8 @@ def generate_session(output_dir: Path, include_video: bool = True) -> dict[str, 
                 speakerId=turn.speaker_id,
                 expectedSpeakerId=speaker_id,
                 text=turn.text,
+                start=turn.start,
+                end=turn.end,
                 partial=False,
                 confidence=turn.confidence,
                 tags=turn.tags,

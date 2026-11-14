@@ -201,6 +201,8 @@ class SessionEngine:
                         turnId=current_id,
                         speakerId=self.turn_builder.current_speaker,
                         text=" ".join(self.turn_builder.current_words),
+                        start=self.turn_builder.current_start,
+                        end=time_s,
                         partial=True,
                         confidence=self.turn_builder.confidence,
                     )
@@ -287,6 +289,8 @@ class SessionEngine:
             turnId=turn.id,
             speakerId=turn.speaker_id,
             text=turn.text,
+            start=turn.start,
+            end=turn.end,
             partial=False,
             confidence=turn.confidence,
             tags=turn.tags,
