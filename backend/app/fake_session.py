@@ -147,6 +147,7 @@ def generate_session(output_dir: Path, include_video: bool = True) -> dict[str, 
     ]
     face_inputs: list[dict[str, object]] = []
     transcript_inputs: list[dict[str, object]] = []
+    anchor_rows: list[dict[str, object]] = []
     randomizer = random.Random(17)
     last_active: str | None = None
     correct = 0
@@ -170,6 +171,15 @@ def generate_session(output_dir: Path, include_video: bool = True) -> dict[str, 
         face_inputs.append(face_message)
         people_frame = tracker.update(time_s, observations)
         events.append(event(time_s, "people_frame", people=people_frame))
+        anchor_rows.append(
+            {
+                "time": round(time_s, 3),
+                "anchors": {
+                    person["id"]: person["captionAnchor"]
+                    for person in people_frame
+                },
+            }
+        )
         for index, item in enumerate((observation(i, time_s, active_index == i) for i in range(3))):
             fusion.add_sample(time_s, f"p{index + 1}", item.mouth_score)
         rms = 0.055 if active_turn else 0.006
@@ -297,6 +307,8 @@ def generate_session(output_dir: Path, include_video: bool = True) -> dict[str, 
     _write_jsonl(output_dir / "events.jsonl", events)
     _write_jsonl(output_dir / "inputs" / "faces.jsonl", face_inputs)
     _write_jsonl(output_dir / "inputs" / "transcript_snapshots.jsonl", transcript_inputs)
+    _write_jsonl(output_dir / "anchors.jsonl", anchor_rows)
+    _write_placeholder_wav(output_dir / "audio.wav")
     _write_jsonl(output_dir / "live_transcript.jsonl", [turn.as_dict() for turn in live_turns])
     _write_jsonl(output_dir / "refined_transcript.jsonl", [turn.as_dict() for turn in refined_turns])
     metadata = {
@@ -310,11 +322,26 @@ def generate_session(output_dir: Path, include_video: bool = True) -> dict[str, 
         "attributionAccuracy": correct / len(turns),
         "eventCount": len(events),
         "videoFile": "silhouette.gif" if include_video else None,
+        "audioFile": "audio.wav",
+        "anchorTrackFile": "anchors.jsonl",
     }
     (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     if include_video:
         _write_silhouette_gif(output_dir / "silhouette.gif", frame_times)
     return metadata
+
+
+def _write_placeholder_wav(path: Path, duration_s: float = 91.0, sample_rate: int = 16_000) -> None:
+    import wave
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        chunk = b"\x00\x00" * sample_rate
+        for _ in range(int(duration_s)):
+            wav.writeframes(chunk)
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict[str, object]]) -> None:

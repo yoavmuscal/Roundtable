@@ -41,6 +41,13 @@ class SessionRecorder:
         if self.session_dir is not None:
             (self.session_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
+    def write_turns(self, filename: str, turns: list[Turn]) -> None:
+        if self.session_dir is not None:
+            (self.session_dir / filename).write_text(
+                "".join(json.dumps(turn.as_dict(), separators=(",", ":")) + "\n" for turn in turns),
+                encoding="utf-8",
+            )
+
 
 @dataclass
 class SessionEngine:
@@ -263,6 +270,7 @@ class SessionEngine:
         messages.append(self._message(stop_time, "phase", phase="refine"))
         for message in messages:
             self.recorder.record(message)
+        self.recorder.write_turns("live_transcript.jsonl", self.turns)
         return messages
 
     def clock(self) -> float:

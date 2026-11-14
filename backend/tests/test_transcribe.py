@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import pytest
+
 from backend.app.transcribe import StreamingTranscriptParser, TranscriptTurnBuilder
 
 
@@ -34,6 +38,18 @@ def test_flush_after_silence_and_stop() -> None:
     assert commit.words == ("one", "two")
     parser.feed_snapshot("tail", 2.0)
     assert parser.flush(3.0).words == ("tail",)  # type: ignore[union-attr]
+
+
+@pytest.mark.skipif(
+    not (Path(__file__).parent / "fixtures" / "argmax-stream-sample.txt").exists(),
+    reason="waiting for Yoav's raw argmax-cli streaming sample",
+)
+def test_real_argmax_stream_sample() -> None:
+    sample = (Path(__file__).parent / "fixtures" / "argmax-stream-sample.txt").read_bytes()
+    parser = StreamingTranscriptParser()
+    commits = parser.feed_chunk(sample, 0.0)
+    parser.flush(1.0)
+    assert parser.committed_words or commits
 
 
 def test_turn_builder_splits_12_second_gap_and_speaker_change() -> None:

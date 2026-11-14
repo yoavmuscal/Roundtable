@@ -266,10 +266,16 @@ def validate_json_schema(value: Any, schema: dict[str, Any], path: str = "$") ->
             "boolean": bool,
             "null": type(None),
         }
-        expected = type_map.get(str(expected_type))
-        if expected is not None and not isinstance(value, expected):
-            raise JsonSchemaError(f"{path}: expected {expected_type}")
-        if expected_type in {"number", "integer"} and isinstance(value, bool):
+        expected_names = expected_type if isinstance(expected_type, list) else [expected_type]
+        matches = False
+        for name in expected_names:
+            expected = type_map.get(str(name))
+            if expected is not None and isinstance(value, expected):
+                if name in {"number", "integer"} and isinstance(value, bool):
+                    continue
+                matches = True
+                break
+        if not matches:
             raise JsonSchemaError(f"{path}: expected {expected_type}")
     if "enum" in schema and value not in schema["enum"]:
         raise JsonSchemaError(f"{path}: value must be one of {schema['enum']}")

@@ -12,9 +12,11 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from .audio import MicrophoneLevelMonitor
 from .bonsai import BonsaiWorker, MockBonsaiClient, RealBonsaiClient
 from .calibration import CalibrationError, calibration_from_payload
 from .contract import CONTRACT_VERSION, MessageValidationError, validate_browser_message
+from .export import export_session_ass, ffmpeg_export_command
 from .fake_session import generate_session
 from .geometry import Point
 from .refine import SpeakerKitAdapter, match_clusters_to_people, refine_turns
@@ -79,6 +81,7 @@ def create_app(
     app.state.engine = SessionEngine(session_dir=session_dir, bonsai=app.state.bonsai)
     app.state.sim_task = None
     app.state.transcriber_task = None
+    app.state.audio_monitor = None
 
     async def broadcast(message: dict[str, Any]) -> None:
         external = internal_to_ui(message)
@@ -125,6 +128,7 @@ def create_app(
                 await broadcast(SessionEngine._message(current.clock(), "error", code="refine", message=str(exc)))
         await broadcast(SessionEngine._message(current.clock(), "refine_progress", stage="summary", progress=0.7))
         summary = await current.summarize()
+        current.recorder.write_turns("refined_transcript.jsonl", refined_turns)
         current.phase = "review"
         await broadcast(
             SessionEngine._message(
@@ -156,6 +160,32 @@ def create_app(
     @app.get("/transcript")
     async def transcript() -> dict[str, Any]:
         return {"turns": [turn.as_dict() for turn in engine().turns]}
+
+    @app.post("/export")
+    async def export() -> dict[str, Any]:
+        ass_path = export_session_ass(session_dir)
+        video_path = session_dir / "video.webm"
+        audio_path = session_dir / "audio.wav"
+        output_path = session_dir / "roundtable-captioned.mp4"
+        exported = False
+        error = None
+        if video_path.exists() and audio_path.exists():
+            command = ffmpeg_export_command(video_path, audio_path, ass_path, output_path)
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await process.communicate()
+            exported = process.returncode == 0
+            if not exported:
+                error = stderr.decode("utf-8", errors="replace")[-1000:]
+        return {
+            "assPath": str(ass_path),
+            "videoPath": str(output_path) if exported else None,
+            "exported": exported,
+            "error": error,
+        }
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -242,10 +272,25 @@ def create_app(
             else:
                 for outgoing in current.start():
                     await broadcast(outgoing)
+
+                async def emit_level(time_s: float, rms: float, peak: float) -> None:
+                    await broadcast(engine().handle_level(time_s, rms, peak))
+
+                monitor = MicrophoneLevelMonitor(emit_level, session_dir / "audio.wav")
+                try:
+                    await monitor.start()
+                    app.state.audio_monitor = monitor
+                except RuntimeError as exc:
+                    await broadcast(
+                        SessionEngine._message(current.clock(), "error", code="audio", message=str(exc))
+                    )
                 app.state.transcriber_task = asyncio.create_task(stream_transcriber())
         elif action == "stop":
             if app.state.sim_task and not app.state.sim_task.done():
                 app.state.sim_task.cancel()
+            if app.state.audio_monitor is not None:
+                await app.state.audio_monitor.stop()
+                app.state.audio_monitor = None
             for outgoing in current.stop():
                 await broadcast(outgoing)
             asyncio.create_task(refine_after_stop())

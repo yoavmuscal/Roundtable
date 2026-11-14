@@ -12,6 +12,8 @@ def test_fake_session_matches_expected_replay_behavior(tmp_path: Path) -> None:
     metadata = generate_session(tmp_path, include_video=False)
     assert metadata["eventCount"] >= 2500
     assert metadata["attributionAccuracy"] == 1.0
+    assert (tmp_path / "audio.wav").stat().st_size > 1_000_000
+    assert (tmp_path / "anchors.jsonl").read_text().count("\n") >= 900
     assert metadata["actualTalkShares"]["p1"] == pytest.approx(0.4455, abs=0.002)
     assert metadata["actualTalkShares"]["p2"] == pytest.approx(0.3069, abs=0.002)
     assert metadata["actualTalkShares"]["p3"] == pytest.approx(0.2475, abs=0.002)

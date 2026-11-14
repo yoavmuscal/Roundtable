@@ -31,6 +31,8 @@ def test_unterminated_think_and_no_json_fail_cleanly() -> None:
 def test_schema_validation() -> None:
     with pytest.raises(JsonSchemaError):
         validate_json_schema({"tags": [], "repliesTo": None}, TAG_SCHEMA)
+    with pytest.raises(JsonSchemaError):
+        validate_json_schema({"tags": [], "repliesTo": 3, "actionOwner": None}, TAG_SCHEMA)
 
 
 def test_parse_speakerkit_jsonl_and_plain_lines() -> None:

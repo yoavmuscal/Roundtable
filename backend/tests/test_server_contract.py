@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from backend.app.fake_session import generate_session
 from backend.app.server import create_app
 
 
@@ -48,3 +49,14 @@ def test_backend_websocket_speaks_ui_contract(tmp_path: Path) -> None:
         answer = socket.receive_json()
         assert answer["type"] == "answer"
         assert answer["answer"]["text"]
+
+
+def test_export_endpoint_writes_ass_for_recorded_session(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    generate_session(session, include_video=False)
+    client = TestClient(create_app(mode="sim", session_dir=session, sim_session_dir=session))
+    response = client.post("/export")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["exported"] is False
+    assert (session / "captions.ass").exists()
