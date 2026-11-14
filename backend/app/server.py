@@ -29,6 +29,7 @@ from .session import SessionEngine
 from .simulation import create_simulation_engine, run_simulation
 from .status import status_message
 from .transcribe import ArgmaxTranscriberAdapter
+from .voiceid import VoiceIdentifier
 from .ui_adapter import browser_to_internal, internal_to_ui
 
 
@@ -211,12 +212,45 @@ def create_app(
                 # Argmax keeps running between sessions; only enrollment and live sessions use its text.
                 if current.phase not in {"enroll", "live"}:
                     continue
-                for message in current.handle_transcript_chunk(chunk, current.clock()):
-                    await broadcast(message)
+                await emit(current, current.handle_transcript_chunk(chunk, current.clock()))
         finally:
             raw_log.close()
             app.state.transcriber_state = "off"
             await adapter.stop()
+
+    voice_ids = VoiceIdentifier(speakerkit_command(), session_dir / "voiceid") if mode == "live" and speakerkit_command() else None
+
+    async def voice_check(current: SessionEngine, turn_id_: str) -> None:
+        """Re-check a finished caption's speaker by voice (works with covered mouths)."""
+        monitor = app.state.audio_monitor
+        if voice_ids is None or monitor is None or len(current.people) < 2:
+            return
+        try:
+            match = await voice_ids.identify(current.enrollment_audio(monitor), current.turn_audio(monitor, turn_id_))
+        except Exception:
+            return
+        if match.person_id and match.coverage >= 0.6 and current is engine():
+            for message in current.reassign_turn(turn_id_, match.person_id, match.coverage):
+                await broadcast(message)
+
+    async def emit(current: SessionEngine, messages: list[dict[str, Any]]) -> None:
+        for message in messages:
+            await broadcast(message)
+            if (
+                message.get("type") == "caption"
+                and not message.get("partial")
+                and not message.get("voiceId")
+                and float(message.get("end", 0)) - float(message.get("start", 0)) >= 0.8
+            ):
+                asyncio.create_task(voice_check(current, str(message.get("turnId"))))
+
+    async def warm_speakerkit() -> None:
+        """SpeakerKit's first call loads its models (~14 s); do it during enrollment."""
+        if voice_ids is None:
+            return
+        silence = b"\x00\x00" * 16000 * 2
+        with contextlib.suppress(Exception):
+            await voice_ids.identify({"warm-a": silence, "warm-b": silence}, silence)
 
     def ensure_transcriber() -> None:
         """Start Argmax once and keep it warm, so Start never waits on the model load."""
@@ -420,8 +454,7 @@ def create_app(
             current = engine()
             if current.phase != "live":
                 continue
-            for message in current.tick(current.clock()):
-                await broadcast(message)
+            await emit(current, current.tick(current.clock()))
             beats += 1
             if beats % 4 == 0:
                 await broadcast(current.stats(current.clock()))
@@ -583,6 +616,7 @@ def create_app(
             current.enrollment_intervals = {}
             await ensure_live_audio()
             ensure_transcriber()
+            asyncio.create_task(warm_speakerkit())
             current.begin_enrollment(current.clock())
             await broadcast(SessionEngine._message(current.clock(), "phase", phase="enroll"))
             await broadcast(current.enroll_prompt(0))

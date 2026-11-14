@@ -120,3 +120,16 @@ def test_unbound_people_take_faces_left_to_right() -> None:
     engine.start()
     assert engine.tracker.tracks["p1"].smoothed.face_box.center.x < 0.5
     assert engine.tracker.tracks["p2"].smoothed.face_box.center.x > 0.5
+
+
+def test_voice_match_names_clusters_from_enrollment() -> None:
+    from backend.app.refine import SpeakerSegment
+    from backend.app.voiceid import match_turn
+
+    segments = [SpeakerSegment(0.0, 4.4, "B"), SpeakerSegment(4.8, 8.4, "A"), SpeakerSegment(8.8, 13.0, "B")]
+    regions = {"p1": (0.0, 4.4), "p2": (4.8, 8.5)}
+    match = match_turn(segments, regions, (8.8, 13.2))
+    assert match.person_id == "p1" and match.coverage == 1.0
+    # Both enrollment samples in one cluster: SpeakerKit cannot tell them apart, so no guess.
+    same = [SpeakerSegment(0.0, 8.5, "A"), SpeakerSegment(8.8, 13.0, "A")]
+    assert match_turn(same, regions, (8.8, 13.2)).person_id is None

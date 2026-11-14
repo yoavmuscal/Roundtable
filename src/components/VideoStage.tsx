@@ -158,7 +158,7 @@ export function VideoStage() {
     const byPerson = new Map<string, Caption>();
     Object.entries(latestByPerson).forEach(([personId, captionId]) => {
       const caption = captions[captionId];
-      if (caption && sessionTime - (caption.end ?? caption.start) <= 3.5) {
+      if (caption && caption.personId === personId && sessionTime - (caption.end ?? caption.start) <= 3.5) {
         // One sentence at a time: the previous sentence goes away when the next one starts.
         byPerson.set(personId, { ...caption, text: currentSentence(caption.text) });
       }

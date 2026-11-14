@@ -148,6 +148,48 @@ class SessionEngine:
                     self.bound_ids = bound | {person_id}
         self.enrollment_started_at = time_s
 
+    def enrollment_audio(self, monitor: Any) -> dict[str, bytes]:
+        """Each person's enrollment speech from the microphone buffer (for voice ID)."""
+        from .audio import pcm_between
+
+        clips: dict[str, bytes] = {}
+        for person_id, intervals in self.enrollment_intervals.items():
+            start, end = intervals[-1]
+            clips[person_id] = pcm_between(monitor, self.started_monotonic + start, self.started_monotonic + end)
+        return clips
+
+    def turn_audio(self, monitor: Any, turn_id_: str) -> bytes:
+        from .audio import pcm_between
+
+        turn = next((item for item in self.turns if item.id == turn_id_), None)
+        if turn is None:
+            return b""
+        # Argmax shows words ~1 s after they start, so reach back a little.
+        return pcm_between(monitor, self.started_monotonic + turn.start - 1.0, self.started_monotonic + turn.end + 0.3)
+
+    def reassign_turn(self, turn_id_: str, person_id: str, confidence: float) -> list[dict[str, Any]]:
+        """Voice ID disagreed with the face-based guess: move the finished caption."""
+        turn = next((item for item in self.turns if item.id == turn_id_), None)
+        if turn is None or turn.speaker_id == person_id:
+            return []
+        turn.speaker_id = person_id
+        turn.confidence = max(turn.confidence, confidence)
+        caption = self._message(
+            turn.end,
+            "caption",
+            turnId=turn.id,
+            speakerId=person_id,
+            text=turn.text,
+            start=turn.start,
+            end=turn.end,
+            partial=False,
+            confidence=turn.confidence,
+            tags=turn.tags,
+            voiceId=True,
+        )
+        self.recorder.record(caption)
+        return [caption, self.stats(self.clock())]
+
     def bind_remaining_left_to_right(self) -> None:
         """People not bound by enrollment take the remaining faces in left-to-right order."""
         bound = getattr(self, "bound_ids", set())

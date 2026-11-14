@@ -52,6 +52,13 @@ class MicrophoneLevelMonitor:
         self.started_monotonic = self.loop.time()
         # time.monotonic() matches asyncio's loop clock on macOS/Linux; kept for WAV alignment.
         self.started_wall_monotonic = __import__('time').monotonic()
+        # Recent PCM kept in memory for live voice ID (SpeakerKit on short clips).
+        import threading
+
+        self._pcm = bytearray()
+        self._pcm_dropped = 0
+        self._pcm_lock = threading.Lock()
+        self._pcm_limit = self.sample_rate * 2 * 60 * 30  # 30 minutes of 16 kHz mono int16
         try:
             import sounddevice as sd
         except ImportError as exc:
@@ -66,6 +73,12 @@ class MicrophoneLevelMonitor:
             pcm = bytes(indata)
             if self.recorder:
                 self.recorder.write(pcm)
+            with self._pcm_lock:
+                self._pcm.extend(pcm)
+                overflow = len(self._pcm) - self._pcm_limit
+                if overflow > 0:
+                    del self._pcm[:overflow]
+                    self._pcm_dropped += overflow
             rms, peak = pcm16_levels(pcm)
             if self.loop:
                 session_time = self.loop.time() - self.started_monotonic
@@ -104,3 +117,16 @@ def pcm16_levels(pcm: bytes) -> tuple[float, float]:
         peak = max(peak, magnitude)
         sum_squares += value * value
     return math.sqrt(sum_squares / count) / 32768.0, peak / 32768.0
+
+
+def pcm_between(monitor: "MicrophoneLevelMonitor", wall_start: float, wall_end: float) -> bytes:
+    """PCM recorded between two time.monotonic() instants (empty if not buffered)."""
+    lock = getattr(monitor, "_pcm_lock", None)
+    if lock is None or wall_end <= wall_start:
+        return b""
+    rate = monitor.sample_rate
+    with lock:
+        first = int(max(0.0, wall_start - monitor.started_wall_monotonic) * rate) * 2 - monitor._pcm_dropped
+        last = int(max(0.0, wall_end - monitor.started_wall_monotonic) * rate) * 2 - monitor._pcm_dropped
+        first, last = max(0, first), min(len(monitor._pcm), last)
+        return bytes(monitor._pcm[first:last]) if last > first else b""
