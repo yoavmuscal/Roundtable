@@ -387,14 +387,42 @@ kbd {
 .off-camera-cue span { color: var(--amber); }
 .camera-error {
   position: absolute;
-  z-index: 6;
+  z-index: 8;
   left: 16px;
+  right: 16px;
   bottom: 40px;
-  border: 1px solid rgba(245, 165, 36, 0.4);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid rgba(245, 165, 36, 0.5);
   border-radius: var(--radius-sm);
-  padding: 0.45rem 0.65rem;
-  background: rgba(16, 20, 27, 0.85);
+  padding: 0.6rem 0.75rem;
+  background: rgba(16, 20, 27, 0.92);
   color: #ffd79a;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.camera-error span { flex: 1; }
+.camera-error button { flex: none; padding: 0.35rem 0.8rem; font-size: 0.76rem; }
+.camera-picker {
+  position: absolute;
+  z-index: 7;
+  right: 16px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-faint);
+  font-size: 0.7rem;
+}
+.camera-picker select {
+  max-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem 0.6rem;
+  background: rgba(26, 31, 41, 0.92);
+  color: var(--text-soft);
+  font: inherit;
   font-size: 0.72rem;
 }
 
@@ -547,3 +575,23 @@ h1 { margin-bottom: 1rem; font-size: clamp(1.8rem, 3.4vw, 2.9rem); line-height: 
   .enroll-cards { grid-template-columns: 1fr; }
   .answer-card, .caption-history ~ .answer-card { right: 18px; bottom: 18px; width: calc(100vw - 36px); }
 }
+
+.stage-subtitle {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  bottom: 44px;
+  max-width: 82%;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.9rem;
+  background: rgba(11, 14, 19, 0.88);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: center;
+}
+.stage-subtitle.large { font-size: 1.35rem; }
+.review-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }

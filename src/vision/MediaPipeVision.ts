@@ -46,6 +46,8 @@ export interface BrowserVisionOptions {
   frameIntervalMs?: number;
   onObservations: (observations: VisionObservation[], atSeconds: number) => void;
   onError?: (error: Error) => void;
+  /** Camera to open; omitted = prefer a wired iPhone, else the default (laptop) camera. */
+  deviceId?: string;
 }
 
 /** Camera + MediaPipe processor. All model and WASM paths are local app assets. */
@@ -88,7 +90,7 @@ export class MediaPipeBrowserVision {
       numPoses: 4,
     });
     if (!video.srcObject) {
-      this.stream = await openPreferredCamera();
+      this.stream = await openPreferredCamera(this.options.deviceId);
       video.srcObject = this.stream;
       await video.play();
     }
@@ -213,16 +215,27 @@ export class MediaPipeBrowserVision {
   }
 }
 
-export async function openPreferredCamera(): Promise<MediaStream> {
-  // Ask once so Chrome exposes camera labels, then prefer the wired iPhone.
+/** Video inputs with labels (labels appear only after camera permission is granted). */
+export async function listCameras(): Promise<MediaDeviceInfo[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices.filter((device) => device.kind === 'videoinput');
+}
+
+export async function openPreferredCamera(deviceId?: string): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new DOMException('This browser cannot open cameras on this page.', 'NotSupportedError');
+  }
+  // Ask once so the browser exposes camera labels, then honour the picker or prefer a wired iPhone.
   const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
   permissionStream.getTracks().forEach((track) => track.stop());
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  const cameras = devices.filter((device) => device.kind === 'videoinput');
+  const cameras = await listCameras();
+  const chosen = deviceId ? cameras.find((device) => device.deviceId === deviceId) : undefined;
   const iphone = cameras.find((device) => /iphone/i.test(device.label));
+  const target = chosen ?? iphone;
   const constraints: MediaStreamConstraints = {
     video: {
-      deviceId: iphone ? { exact: iphone.deviceId } : undefined,
+      deviceId: target ? { exact: target.deviceId } : undefined,
       width: { ideal: 1280 },
       height: { ideal: 720 },
       frameRate: { ideal: 30 },

@@ -17,10 +17,10 @@ from fastapi.staticfiles import StaticFiles
 
 from .audio import MicrophoneLevelMonitor
 from .bonsai import BonsaiWorker, MockBonsaiClient, RealBonsaiClient
-from .calibration import CalibrationError, calibration_from_payload
+from .calibration import Calibration, CalibrationError, calibration_from_payload
 from .contract import CONTRACT_VERSION, MessageValidationError, validate_browser_message
 from .export import export_session_ass, ffmpeg_export_command
-from .fake_session import generate_session
+from .fake_session import FAKE_CORNERS, FAKE_TABLE, generate_session
 from .geometry import Point
 from .refine import SpeakerKitAdapter, SpeakerSegment, match_clusters_to_people, refine_turns
 from .replay import create_app as create_replay_app
@@ -326,7 +326,9 @@ def create_app(
                     else:
                         await broadcast(current.set_calibration(calibration))
                 elif message_type == "faces":
-                    time_s = float(message.get("time", current.clock()))
+                    # Stamp on arrival: the browser's synced offset goes stale whenever a new
+                    # session resets the clock, and localhost latency is a few milliseconds.
+                    time_s = current.clock() if mode == "live" else float(message.get("time", current.clock()))
                     for outgoing in current.handle_faces(time_s, message.get("people", [])):
                         await broadcast(outgoing)
                 elif message_type == "ask":
@@ -439,6 +441,12 @@ def create_app(
 
                 app.state.sim_task = asyncio.create_task(run_and_refine())
             else:
+                transcriber = app.state.transcriber_task
+                if current.phase == "live" and transcriber is not None and not transcriber.done():
+                    # Already running: rejoin instead of restarting (a restart reloads Whisper for ~20 s).
+                    await broadcast(SessionEngine._message(current.clock(), "phase", phase="live"))
+                    await broadcast(SessionEngine._message(current.clock(), "people", people=current.people))
+                    return
                 fresh = current.phase in {"review", "refine", "live"}
                 # Keep the microphone (and its WAV) running from enrollment into the session so
                 # the enrollment samples are in the same file SpeakerKit diarizes.
@@ -457,6 +465,8 @@ def create_app(
                             current.set_enrolled_people(people)
                     except (json.JSONDecodeError, TypeError, KeyError):
                         pass
+                if current.calibration is None:
+                    current.set_calibration(Calibration(FAKE_CORNERS, FAKE_TABLE))
                 await ensure_live_audio()
                 for outgoing in current.start():
                     await broadcast(outgoing)

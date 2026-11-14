@@ -17,3 +17,41 @@ async def test_bonsai_tags_refined_turns_and_answers_with_citations() -> None:
     assert answer["type"] == "answer"
     assert answer["citedTurnIds"] == ["turn_0001"]
     await worker.stop()
+
+
+def test_live_captions_are_attributed_when_faces_share_the_session_clock() -> None:
+    from backend.app.calibration import Calibration
+    from backend.app.fake_session import FAKE_CORNERS, FAKE_TABLE
+    from backend.app.session import SessionEngine
+
+    engine = SessionEngine()
+    engine.set_enrolled_people(engine.people[:2])
+    engine.set_calibration(Calibration(FAKE_CORNERS, FAKE_TABLE))
+    engine.start()
+
+    def face(x: float, mouth: float) -> dict:
+        return {
+            "faceBox": {"x": x - 0.04, "y": 0.36, "width": 0.08, "height": 0.08},
+            "mouthScore": mouth,
+            "jawVariation": mouth * 0.08,
+            "shoulderPoint": {"x": x, "y": 0.52},
+            "chestPoint": {"x": x, "y": 0.64},
+            "headTopPoint": {"x": x, "y": 0.33},
+            "torsoVisible": True,
+            "shirtHistogram": [1.0 if i == (0 if x < 0.5 else 8) else 0.0 for i in range(32)],
+        }
+
+    messages = []
+    block = "---\nUnconfirmed segment: <|startoftranscript|><|0.00|> Is this working?<|2.0|>\nCurrent text: \n"
+    for step in range(40):  # 4 s at 10/s: the left person talks, the right one is still
+        t = step / 10
+        engine.handle_level(t, 0.05)
+        messages += engine.handle_faces(t, [face(0.3, 0.8), face(0.7, 0.02)])
+        if step == 20:
+            messages += engine.handle_transcript_chunk(block, t)
+    messages += engine.tick(6.0)
+    captions = [m for m in messages if m["type"] == "caption"]
+    assert captions and captions[-1]["partial"] is False
+    assert captions[-1]["speakerId"] == "p1"
+    assert any(m["type"] == "active_speaker" and m["personId"] == "p1" for m in messages)
+    assert any(m["type"] == "map" for m in messages)

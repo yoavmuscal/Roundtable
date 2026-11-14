@@ -59,8 +59,10 @@ export default function App() {
       }
       if (event.key.toLowerCase() === 'l') useRoundtableStore.getState().toggleLargeCaptions();
       if (event.key.toLowerCase() === 'h') useRoundtableStore.getState().toggleHistory();
-      if (event.key.toLowerCase() === 'r') {
+      if (event.key.toLowerCase() === 'r' && useRoundtableStore.getState().status.backend !== 'live') {
+        // R replays the recorded session. In live mode a session starts only from Enroll.
         useRoundtableStore.getState().resetSession();
+        useRoundtableStore.getState().setPhase('live');
         roundtableClient.control('start');
       }
     };

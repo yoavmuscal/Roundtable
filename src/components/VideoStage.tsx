@@ -5,10 +5,20 @@ import { CaptionText } from '../lib/nameText';
 import { ShapeGlyph } from '../lib/shape';
 import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
-import { MediaPipeBrowserVision } from '../vision/MediaPipeVision';
+import { MediaPipeBrowserVision, listCameras } from '../vision/MediaPipeVision';
+import { describeCameraError } from '../lib/cameraErrors';
 import { sendVisionObservations } from '../vision/visionBridge';
 
 const STAGE = { width: 752, height: 424 };
+const CAMERA_KEY = 'roundtable.cameraId';
+
+function savedCameraId(): string {
+  try {
+    return globalThis.localStorage?.getItem(CAMERA_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
 /** Top edge of the drawn table plane; silhouette bodies end here. */
 const TABLE_TOP = STAGE.height - 88;
 
@@ -89,6 +99,9 @@ export function VideoStage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string>();
+  const [cameraId, setCameraId] = useState<string>(savedCameraId);
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [attempt, setAttempt] = useState(0);
 
   const replayVideoUrl = replay?.videoUrl;
   const cameraRequested =
@@ -101,28 +114,45 @@ export function VideoStage() {
     const video = videoRef.current;
     if (!cameraRequested || replayVideoUrl || !video) return;
     let cancelled = false;
+    setCameraError(undefined);
     const vision = new MediaPipeBrowserVision({
+      deviceId: cameraId || undefined,
       onObservations: (observations, atSeconds) => {
         sendVisionObservations(observations, atSeconds, (message) => roundtableClient.send(message));
       },
       onError: (error) => {
-        if (!cancelled) setCameraError(error.message);
+        if (!cancelled) setCameraError(describeCameraError(error));
       },
     });
     vision
       .start(video)
-      .then(() => {
-        if (!cancelled) setCameraActive(true);
+      .then(async () => {
+        if (cancelled) return;
+        setCameraActive(true);
+        setCameras(await listCameras());
       })
-      .catch((error: unknown) => {
-        if (!cancelled) setCameraError(error instanceof Error ? error.message : 'Camera unavailable');
+      .catch(async (error: unknown) => {
+        if (cancelled) return;
+        setCameraError(describeCameraError(error));
+        setCameras(await listCameras().catch(() => []));
       });
     return () => {
       cancelled = true;
       vision.stop();
+      if (video.srcObject instanceof MediaStream) video.srcObject.getTracks().forEach((track) => track.stop());
+      video.srcObject = null;
       setCameraActive(false);
     };
-  }, [cameraRequested, replayVideoUrl]);
+  }, [cameraRequested, replayVideoUrl, cameraId, attempt]);
+
+  const chooseCamera = (id: string) => {
+    try {
+      globalThis.localStorage?.setItem(CAMERA_KEY, id);
+    } catch {
+      // Private windows may block storage; the choice still applies for this session.
+    }
+    setCameraId(id);
+  };
 
   const latestCaptions = useMemo(() => {
     const byPerson = new Map<string, Caption>();
@@ -137,6 +167,14 @@ export function VideoStage() {
     () => layoutBubbles(frames, latestCaptions, STAGE, largeCaptions),
     [frames, latestCaptions, largeCaptions],
   );
+  // Words with no matched speaker (no face moving, or camera off) still need to be readable.
+  const unattributed = useMemo(() => {
+    const latest = Object.values(captions)
+      .filter((caption) => !caption.personId || !frames.some((frame) => frame.id === caption.personId))
+      .sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
+    if (!latest || sessionTime - (latest.end ?? latest.start) > 3.5) return undefined;
+    return latest;
+  }, [captions, frames, sessionTime]);
   const offCameraSpeaking = level > 0.12 && !activeSpeakerId;
   const mediaActive = Boolean(replayVideoUrl || cameraActive);
   const stageClass = ['video-stage', mediaActive ? 'media-present' : '', stageAlert ? 'alert' : ''].join(' ').trim();
@@ -183,7 +221,25 @@ export function VideoStage() {
           </button>
         </div>
       ) : null}
-      {cameraError ? <div className="camera-error">{cameraError}; using tracker overlays only.</div> : null}
+      {cameraRequested && !replayVideoUrl ? (
+        <label className="camera-picker">
+          <span>Camera</span>
+          <select value={cameraId} onChange={(event) => chooseCamera(event.target.value)} aria-label="Choose camera">
+            <option value="">Auto (iPhone if connected)</option>
+            {cameras.map((camera, index) => (
+              <option key={camera.deviceId || index} value={camera.deviceId}>
+                {camera.label || `Camera ${index + 1}`}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {cameraError ? (
+        <div className="camera-error" role="alert">
+          <span>{cameraError}</span>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry</button>
+        </div>
+      ) : null}
       {frames.map((frame) => (
         <PersonSilhouette
           key={frame.id}
@@ -219,6 +275,11 @@ export function VideoStage() {
           </article>
         );
       })}
+      {unattributed ? (
+        <div className={largeCaptions ? 'stage-subtitle large' : 'stage-subtitle'} role="status" aria-live="polite">
+          <CaptionText text={unattributed.text.length > 110 ? `…${unattributed.text.slice(-109)}` : unattributed.text} people={people} />
+        </div>
+      ) : null}
       {offCameraSpeaking ? (
         <div className="off-camera-cue" role="status">
           <span aria-hidden="true">●</span> Someone is speaking off-camera

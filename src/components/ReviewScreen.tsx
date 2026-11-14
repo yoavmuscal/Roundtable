@@ -41,7 +41,18 @@ export function ReviewScreen() {
   return (
     <main className="review-screen">
       <section className="review-summary card">
-        <p className="eyebrow">After Stop · refined locally</p>
+        <div className="review-top">
+          <p className="eyebrow">After Stop · refined locally</p>
+          <button
+            type="button"
+            onClick={() => {
+              useRoundtableStore.getState().resetSession();
+              roundtableClient.control('recalibrate');
+            }}
+          >
+            New session
+          </button>
+        </div>
         <h1>Review the meeting without replaying the whole room.</h1>
         {refined ? (
           <>
