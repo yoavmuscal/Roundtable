@@ -145,24 +145,42 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
         break;
       case 'caption': {
         const people = state.people;
+        const alreadyFinal = state.history.some((item) => item.turnId === message.caption.turnId);
         const nameAlert =
           message.caption.kind === 'final' &&
+          !alreadyFinal &&
           (message.caption.nameAlert || matchingPeople(message.caption.text, people).length > 0);
-        const caption = { ...message.caption, nameAlert };
+        const displayEnd =
+          message.caption.kind === 'final' && !alreadyFinal
+            ? Math.max(message.caption.end ?? state.sessionTime, state.sessionTime)
+            : message.caption.end;
+        const caption = { ...message.caption, end: displayEnd, nameAlert };
         const captions = { ...state.captions, [caption.id]: caption };
-        const latestByPerson = caption.personId
-          ? { ...state.latestByPerson, [caption.personId]: caption.id }
-          : state.latestByPerson;
+        const nextLatest = { ...state.latestByPerson };
+        // If a caption moved from one person to another, clear it from the previous person's box.
+        for (const [pid, cid] of Object.entries(nextLatest)) {
+          if (cid === caption.id && pid !== caption.personId) {
+            delete nextLatest[pid];
+          }
+        }
+        if (caption.personId) {
+          const existingId = nextLatest[caption.personId];
+          const existing = existingId ? state.captions[existingId] : undefined;
+          const isRecent = state.sessionTime - (message.caption.end ?? message.caption.start) <= 2.5;
+          if (!alreadyFinal || (!existing && isRecent)) {
+            nextLatest[caption.personId] = caption.id;
+          }
+        }
         const history =
           caption.kind === 'final'
             ? [...state.history.filter((item) => item.turnId !== caption.turnId), caption].slice(-80)
             : state.history;
         set({
           captions,
-          latestByPerson,
+          latestByPerson: nextLatest,
           history,
-          stageAlert: nameAlert,
-          sessionTime: Math.max(state.sessionTime, caption.end ?? caption.start),
+          stageAlert: nameAlert || state.stageAlert,
+          sessionTime: Math.max(state.sessionTime, message.caption.end ?? caption.start),
         });
         if (nameAlert) {
           window.setTimeout(() => {

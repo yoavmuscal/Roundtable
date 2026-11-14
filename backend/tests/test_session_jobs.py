@@ -153,3 +153,100 @@ def test_enrollment_collisions_names_people_who_share_a_voice() -> None:
     ]
     groups = enrollment_collisions(alike, regions)
     assert groups == [["p1", "p2"]]
+
+
+def test_enrollment_seat_drift_between_samples_still_binds_right_faces() -> None:
+    """Reproduces the laptop webcam bug where p1 drifted onto p2's seat before p2 enrolled."""
+    from backend.app.session import SessionEngine
+
+    engine = SessionEngine()
+    engine.set_enrolled_people([
+        {"id": "p1", "name": "Yoav", "aliases": ["Yoav"], "color": "#8B7CF6", "shape": "circle"},
+        {"id": "p2", "name": "Cello", "aliases": ["Cello"], "color": "#2DD4A7", "shape": "square"},
+    ])
+    # Yoav (p1) enrolls alone on the left (x=0.37).
+    engine.arm_enrollment(0.0)
+    for step in range(20):
+        t = step / 10
+        engine.handle_level(t, 0.05)
+        engine.handle_faces(t, [_face(0.37, 0.7, 0)])
+    engine.take_enrollment_sample("p1", 2.0)
+
+    # Force a swapped track state like the live webcam drift (p1 at 0.88, p2 at 0.33).
+    engine.handle_faces(2.5, [_face(0.33, 0.0, 8), _face(0.88, 0.0, 0)])
+    if engine.tracker.tracks["p1"].smoothed.face_box.center.x < 0.5:
+        engine._swap_tracks("p1", "p2")
+    assert engine.tracker.tracks["p1"].smoothed.face_box.center.x > 0.7
+
+    # Now Cello (p2) enrolls on the right (x=0.88) — must NOT be blocked by bound_ids!
+    engine.arm_enrollment(3.0)
+    for step in range(30, 50):
+        t = step / 10
+        engine.handle_level(t, 0.05)
+        engine.handle_faces(t, [_face(0.33, 0.0, 8), _face(0.88, 0.8, 0)])
+    engine.take_enrollment_sample("p2", 5.0)
+    engine.start()
+    assert engine.tracker.tracks["p1"].smoothed.face_box.center.x < 0.45
+    assert engine.tracker.tracks["p2"].smoothed.face_box.center.x > 0.75
+
+
+def test_self_intro_swaps_swapped_faces_and_locks_voice() -> None:
+    """Saying 'I'm Yoav' (even transcribed as 'I'm your av') locks face and voice to Yoav."""
+    from backend.app.session import SessionEngine, match_self_intro
+
+    people = [
+        {"id": "p1", "name": "Yoav", "aliases": ["Yoav"], "color": "#8B7CF6", "shape": "circle"},
+        {"id": "p2", "name": "Cello", "aliases": ["Cello"], "color": "#2DD4A7", "shape": "square"},
+    ]
+    assert match_self_intro("I'm talking right now", people) is None
+    assert match_self_intro("So I'm going to use this. I'm your av. What if I'm speaking?", people) == "p1"
+    assert match_self_intro("Hi, my name is Cello!", people) == "p2"
+
+    engine = SessionEngine()
+    engine.set_enrolled_people(people)
+    engine.start()
+    # Start with inverted seats: p2 on the left (x=0.30), p1 on the right (x=0.75).
+    for step in range(10):
+        t = step / 10
+        engine.handle_level(t, 0.05)
+        engine.handle_faces(t, [_face(0.75, 0.0, 0), _face(0.30, 0.75, 8)])
+    assert engine.tracker.tracks["p1"].smoothed.face_box.center.x > 0.6
+    assert engine.tracker.tracks["p2"].smoothed.face_box.center.x < 0.4
+
+    # Left face says "I'm your av" -> swaps tracks so p1 is on the left face!
+    block = "---\nConfirmed segment: <|0.00|> I'm your av. What if I'm speaking?<|2.0|>\nCurrent text: \n"
+    engine.transcript.baseline_pending = False
+    engine.handle_transcript_chunk(block, 1.2)
+    assert engine.tracker.tracks["p1"].smoothed.face_box.center.x < 0.4
+    assert engine.turn_builder.current_speaker == "p1"
+    assert "p1" in engine.enrollment_intervals
+
+
+def test_partial_caption_never_pastes_previous_speaker_words_onto_new_speaker() -> None:
+    from backend.app.session import SessionEngine
+
+    engine = SessionEngine()
+    engine.set_enrolled_people(engine.people[:2])
+    engine.start()
+    engine.transcript.baseline_pending = False
+    # p1 speaks at t=0..1.0
+    for step in range(10):
+        t = step / 10
+        engine.handle_level(t, 0.05)
+        engine.handle_faces(t, [_face(0.30, 0.8, 0), _face(0.70, 0.0, 8)])
+    engine.handle_transcript_chunk("---\nConfirmed segment: <|0.00|> Almost really well done.<|1.0|>\nCurrent text: \n", 1.0)
+    assert engine.turn_builder.current_speaker == "p1"
+
+    # Immediately at t=1.1..1.6 (< 1.2s gap), p2 starts speaking unconfirmed words!
+    msgs = []
+    for step in range(11, 17):
+        t = step / 10
+        engine.handle_level(t, 0.05)
+        engine.handle_faces(t, [_face(0.30, 0.0, 0), _face(0.70, 0.85, 8)])
+    msgs = engine.handle_transcript_chunk("---\nConfirmed segment: <|0.00|> Almost really well done.<|1.0|>\nUnconfirmed segment: <|1.0|> Yes I agree with that<|1.6|>\nCurrent text: \n", 1.6)
+    partials = [m for m in msgs if m["type"] == "caption" and m["partial"]]
+    assert partials
+    last_partial = partials[-1]
+    assert last_partial["speakerId"] == "p2"
+    assert "Almost really well done" not in last_partial["text"]
+    assert last_partial["text"] == "Yes I agree with that"

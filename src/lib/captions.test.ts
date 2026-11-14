@@ -14,4 +14,9 @@ describe('currentSentence', () => {
   it('leaves text without punctuation alone', () => {
     expect(currentSentence('  hello   there ')).toBe('hello there');
   });
+
+  it('keeps a short finished affirmation attached to the sentence before it', () => {
+    expect(currentSentence('I mean almost perfect. Yeah.')).toBe('I mean almost perfect. Yeah.');
+    expect(currentSentence('The actual subtitling is much better. Yes.')).toBe('The actual subtitling is much better. Yes.');
+  });
 });

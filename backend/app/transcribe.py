@@ -52,6 +52,29 @@ def _strip_already_flushed(flushed: list[str], words: tuple[str, ...]) -> tuple[
     return words[matched:]
 
 
+def _strip_committed_overlap(committed: list[str], partial: tuple[str, ...]) -> tuple[str, ...]:
+    """Remove any prefix of `partial` that repeats the tail of `committed`."""
+    if not committed or not partial:
+        return partial
+    recent = [_norm(w) for w in committed[-30:]]
+    norm_partial = [_norm(w) for w in partial]
+    # Exact suffix-to-prefix overlap (>= 2 words).
+    max_ov = min(len(recent), len(norm_partial))
+    for ov in range(max_ov, 1, -1):
+        if recent[-ov:] == norm_partial[:ov]:
+            return partial[ov:]
+    # Also check if the last 3 committed words appear inside the first 20 partial words
+    # (when Unconfirmed segment still contains the end of the previous sentence too).
+    for tail_len in (4, 3):
+        if len(recent) >= tail_len:
+            tail = recent[-tail_len:]
+            limit = min(len(norm_partial) - tail_len + 1, 20)
+            for idx in range(max(0, limit)):
+                if norm_partial[idx : idx + tail_len] == tail:
+                    return partial[idx + tail_len :]
+    return partial
+
+
 @dataclass(frozen=True, slots=True)
 class TranscriptCommit:
     words: tuple[str, ...]
@@ -154,6 +177,7 @@ class StreamingTranscriptParser:
         partial = _strip_already_flushed(self._flushed, raw_partial) if self._flushed else raw_partial
         if new_words:
             self.committed_words.extend(new_words)
+            partial = _strip_committed_overlap(self.committed_words, partial)
             spoken_end = self._speech_last if self._speech_last is not None else time_s
             spoken_start = self._speech_start if self._speech_start is not None else None
             # When Argmax confirms a phrase directly or after a flush, reach back across

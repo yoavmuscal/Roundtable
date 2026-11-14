@@ -163,7 +163,7 @@ export function VideoStage() {
     const byPerson = new Map<string, Caption>();
     Object.entries(latestByPerson).forEach(([personId, captionId]) => {
       const caption = captions[captionId];
-      if (caption && caption.personId === personId && sessionTime - (caption.end ?? caption.start) <= 3.5) {
+      if (caption && caption.personId === personId && sessionTime - (caption.end ?? caption.start) <= 5.0) {
         byPerson.set(personId, { ...caption, text: currentSentence(caption.text) });
       }
     });
@@ -171,7 +171,7 @@ export function VideoStage() {
     const loose = Object.values(captions)
       .filter((caption) => !caption.personId || !frames.some((frame) => frame.id === caption.personId))
       .sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
-    if (loose && frames.length && sessionTime - (loose.end ?? loose.start) <= 3.5) {
+    if (loose && frames.length && sessionTime - (loose.end ?? loose.start) <= 5.0) {
       const target = frames.some((frame) => frame.id === activeSpeakerId) ? activeSpeakerId! : frames[0].id;
       if (!byPerson.has(target)) byPerson.set(target, { ...loose, personId: target, text: currentSentence(loose.text) });
     }

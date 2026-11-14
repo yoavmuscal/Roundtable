@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import difflib
 import json
+import re
 import time
 from dataclasses import dataclass, field
+from itertools import permutations
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -20,6 +23,79 @@ from .models import FaceObservation, Turn
 from .questions import OpenQuestionTracker, talk_shares
 from .tracking import PersonTracker
 from .transcribe import StreamingTranscriptParser, TranscriptTurnBuilder
+
+INTRO_PATTERNS = (
+    re.compile(r"(?:^|\b)(?:hi|hey|hello)?[,\s]*(?:i'm|i\s+am|im|my\s+name\s+is|my\s+name's|this\s+is)\s+([a-zA-Z'-]+)(?:\s+([a-zA-Z'-]+))?", re.IGNORECASE),
+    re.compile(r"(?:^|\b)([a-zA-Z'-]+)\s+(?:here|speaking)(?:\b|$)", re.IGNORECASE),
+)
+NON_NAME_WORDS = frozenset({
+    "talking", "speaking", "going", "saying", "trying", "asking", "ready", "good",
+    "fine", "great", "here", "not", "just", "sure", "okay", "ok", "doing", "looking",
+    "testing", "working", "listening", "waiting", "back", "done", "almost", "really",
+    "very", "so", "a", "an", "the", "that", "this", "it", "one", "in", "on", "at",
+    "still", "only", "also", "happy", "glad", "sorry", "thinking", "wondering",
+})
+
+
+def _clean_alpha(value: str) -> str:
+    return re.sub(r"[^a-z]", "", value.lower())
+
+
+def match_self_intro(text: str, people: list[dict[str, Any]]) -> str | None:
+    """Detect when a speaker introduces themselves (e.g. 'I'm Yoav', 'My name is Cello').
+
+    Uses fuzzy matching so Whisper splits like 'I'm your av' still match 'Yoav'.
+    """
+    if not text or not people:
+        return None
+    candidates: list[str] = []
+    for pattern in INTRO_PATTERNS:
+        for match in pattern.finditer(text):
+            groups = [g for g in match.groups() if g]
+            if not groups:
+                continue
+            first = _clean_alpha(groups[0])
+            if first and first not in NON_NAME_WORDS and first != "your":
+                candidates.append(first)
+            if len(groups) >= 2:
+                second = _clean_alpha(groups[1])
+                # Allow 2-word phonetic splits like "your av" -> "yourav" for "Yoav",
+                # as long as the second token isn't an everyday verb/filler.
+                if first and second and second not in NON_NAME_WORDS and len(second) <= 5:
+                    candidates.append(first + second)
+    if not candidates:
+        return None
+
+    best_person: str | None = None
+    best_score = 0.0
+    second_score = 0.0
+    for cand in candidates:
+        scores_by_person: dict[str, float] = {}
+        for person in people:
+            pid = str(person["id"])
+            raw_names = [str(person.get("name", "")), *(str(a) for a in person.get("aliases", []))]
+            person_best = 0.0
+            for raw in raw_names:
+                alias = _clean_alpha(raw)
+                if not alias:
+                    continue
+                if cand == alias:
+                    person_best = 1.0
+                    break
+                if len(alias) >= 3 and len(cand) >= 3:
+                    ratio = difflib.SequenceMatcher(None, cand, alias).ratio()
+                    person_best = max(person_best, ratio)
+            scores_by_person[pid] = person_best
+        ranked = sorted(scores_by_person.items(), key=lambda item: item[1], reverse=True)
+        if not ranked:
+            continue
+        top_pid, top_val = ranked[0]
+        runner_up = ranked[1][1] if len(ranked) > 1 else 0.0
+        if top_val >= 0.72 and top_val - runner_up >= 0.18 and top_val > best_score:
+            best_person = top_pid
+            best_score = top_val
+            second_score = runner_up
+    return best_person if best_score >= 0.72 and best_score - second_score >= 0.18 else None
 
 
 class SessionRecorder:
@@ -84,6 +160,10 @@ class SessionEngine:
         self.enrollment_intervals: dict[str, list[tuple[float, float]]] = {}
         self.enrollment_started_at: float | None = None
         self.enrollment_armed = False
+        self.enrolled_face_x: dict[str, float] = {}
+        self.self_intro_locked: set[str] = set()
+        self._face_samples: list[tuple[float, str, float, float]] = []
+        self._last_track_count = 0
         self.tracker = PersonTracker(thresholds=self.thresholds)
         self.fusion = SpeakerFusion(self.thresholds)
         self.active_gate = ActiveSpeakerGate()
@@ -139,28 +219,135 @@ class SessionEngine:
         self.enrollment_armed = False
         self.enrollment_started_at = None
 
-    def record_enrollment(self, person_id: str, time_s: float) -> None:
-        """Store the voice sample window for one person and bind their face.
+    def _swap_tracks(self, a: str, b: str) -> None:
+        if a == b:
+            return
+        self.tracker.relabel(a, b)
+        self.fusion.relabel(a, b)
+        swap = {a: b, b: a}
+        self._face_samples = [
+            (t, swap.get(tid, tid), x, m)
+            for t, tid, x, m in self._face_samples
+        ]
 
-        The face whose mouth moved most while this person read their sentence becomes
-        this person, so names on screen follow enrollment instead of detection order.
+    def record_enrollment(self, person_id: str, time_s: float) -> None:
+        """Store the voice sample window and screen seat position for one person.
+
+        Records where on screen the speaking face was during this sample across ALL
+        visible tracks (so an earlier track drift cannot block seat assignment).
         """
         if self.enrollment_started_at is not None and time_s > self.enrollment_started_at:
             start = self.enrollment_started_at
             self.enrollment_intervals.setdefault(person_id, []).append((start, time_s))
-            bound = getattr(self, "bound_ids", set())
-            candidates = {
-                track_id: score
-                for track_id, score in self.fusion.mean_mouth(start, time_s).items()
-                if track_id in self.tracker.tracks and track_id not in (bound - {person_id})
-            }
-            if candidates:
-                best, score = max(candidates.items(), key=lambda item: item[1])
-                if score >= 0.15:
-                    self.tracker.relabel(best, person_id)
-                    self.fusion.relabel(best, person_id)
-                    self.bound_ids = bound | {person_id}
+            by_track: dict[str, list[tuple[float, float]]] = {}
+            for sample_t, tid, x, mouth in self._face_samples:
+                if start <= sample_t <= time_s:
+                    by_track.setdefault(tid, []).append((x, mouth))
+            best_tid: str | None = None
+            best_mouth = 0.0
+            best_x = 0.5
+            for tid, pts in by_track.items():
+                mean_m = sum(m for _, m in pts) / len(pts)
+                if mean_m > best_mouth:
+                    best_mouth = mean_m
+                    w_sum = sum(max(0.02, m) for _, m in pts)
+                    best_x = sum(x * max(0.02, m) for x, m in pts) / w_sum
+                    best_tid = tid
+            if best_tid is not None and best_mouth >= 0.08:
+                self.enrolled_face_x[person_id] = best_x
+                self.bound_ids = getattr(self, "bound_ids", set()) | {person_id}
+                self.align_enrolled_faces()
+            else:
+                # Fallback when tests feed mouth samples without full face frames.
+                candidates = {
+                    tid: score
+                    for tid, score in self.fusion.mean_mouth(start, time_s).items()
+                    if tid in self.tracker.tracks
+                }
+                if candidates:
+                    best, score = max(candidates.items(), key=lambda item: item[1])
+                    if score >= 0.12:
+                        track = self.tracker.tracks[best]
+                        self.enrolled_face_x[person_id] = track.smoothed.face_box.center.x
+                        self.bound_ids = getattr(self, "bound_ids", set()) | {person_id}
+                        self.align_enrolled_faces()
         self.enrollment_started_at = time_s
+
+    def align_enrolled_faces(self) -> None:
+        """Assign enrolled people 1-to-1 to active face tracks by their enrolled x positions."""
+        tracks = list(self.tracker.tracks.values())
+        if not tracks:
+            return
+        enrolled_ids = [str(person["id"]) for person in self.people]
+        anchored = [pid for pid in enrolled_ids if pid in self.enrolled_face_x]
+        if anchored and len(tracks) >= 1:
+            track_ids = [t.id for t in tracks]
+            track_x = {t.id: t.smoothed.face_box.center.x for t in tracks}
+            target_assignment: dict[str, str] = {}  # person_id -> current track_id
+            if len(anchored) <= len(track_ids):
+                best_cost = float("inf")
+                for chosen_tids in permutations(track_ids, len(anchored)):
+                    cost = sum(abs(track_x[tid] - self.enrolled_face_x[pid]) for pid, tid in zip(anchored, chosen_tids))
+                    if cost < best_cost:
+                        best_cost = cost
+                        target_assignment = dict(zip(anchored, chosen_tids))
+            else:
+                best_cost = float("inf")
+                for chosen_pids in permutations(anchored, len(track_ids)):
+                    cost = sum(abs(track_x[tid] - self.enrolled_face_x[pid]) for pid, tid in zip(chosen_pids, track_ids))
+                    if cost < best_cost:
+                        best_cost = cost
+                        target_assignment = dict(zip(chosen_pids, track_ids))
+            # Track actual object identity across sequential swaps.
+            obj_for_person = {pid: self.tracker.tracks[tid] for pid, tid in target_assignment.items() if tid in self.tracker.tracks}
+            for pid, track_obj in obj_for_person.items():
+                if track_obj.id != pid:
+                    self._swap_tracks(track_obj.id, pid)
+
+        bound = set(self.enrolled_face_x.keys()) | getattr(self, "bound_ids", set())
+        remaining_people = [pid for pid in enrolled_ids if pid not in bound]
+        remaining_tracks = [self.tracker.tracks[tid] for tid in self.tracker.leftmost_first([tid for tid in self.tracker.tracks if tid not in bound])]
+        for track_obj, pid in zip(remaining_tracks, remaining_people):
+            if track_obj.id != pid:
+                self._swap_tracks(track_obj.id, pid)
+
+    def lock_speaker_identity(self, person_id: str, start_s: float, end_s: float) -> list[dict[str, Any]]:
+        """A speaker just said their own name ('I'm Yoav'): bind their moving face and voice."""
+        enrolled_ids = {str(person["id"]) for person in self.people}
+        if person_id not in enrolled_ids:
+            return []
+        mouths = {
+            tid: score
+            for tid, score in self.fusion.mean_mouth(max(0.0, start_s - 0.35), end_s + 0.15).items()
+            if tid in self.tracker.tracks and self.tracker.tracks[tid].state != "away"
+        }
+        best_tid: str | None = None
+        if mouths:
+            cand_tid, cand_score = max(mouths.items(), key=lambda item: item[1])
+            if cand_score >= 0.05 or len(mouths) == 1:
+                best_tid = cand_tid
+        elif len(self.tracker.tracks) == 1:
+            best_tid = next(iter(self.tracker.tracks))
+
+        reassigned_msgs: list[dict[str, Any]] = []
+        if best_tid is not None and best_tid != person_id:
+            other_id = best_tid
+            self._swap_tracks(best_tid, person_id)
+            if person_id in self.tracker.tracks:
+                self.enrolled_face_x[person_id] = self.tracker.tracks[person_id].smoothed.face_box.center.x
+            if other_id in self.tracker.tracks and other_id in enrolled_ids:
+                self.enrolled_face_x[other_id] = self.tracker.tracks[other_id].smoothed.face_box.center.x
+            if self.turn_builder.current_speaker in {person_id, other_id}:
+                swap_map = {person_id: other_id, other_id: person_id}
+                self.turn_builder.current_speaker = swap_map[self.turn_builder.current_speaker]
+        elif person_id in self.tracker.tracks:
+            self.enrolled_face_x[person_id] = self.tracker.tracks[person_id].smoothed.face_box.center.x
+
+        self.self_intro_locked.add(person_id)
+        self.bound_ids = getattr(self, "bound_ids", set()) | {person_id}
+        if end_s - start_s >= 0.6:
+            self.enrollment_intervals.setdefault(person_id, []).append((start_s, end_s))
+        return reassigned_msgs
 
     def enrollment_audio(self, monitor: Any) -> dict[str, bytes]:
         """Each person's enrollment speech from the microphone buffer (for voice ID)."""
@@ -205,25 +392,20 @@ class SessionEngine:
         return [caption, self.stats(self.clock())]
 
     def bind_remaining_left_to_right(self) -> None:
-        """People not bound by enrollment take the remaining faces in left-to-right order."""
-        bound = getattr(self, "bound_ids", set())
-        people = [str(person["id"]) for person in self.people if str(person["id"]) not in bound]
-        ordered = [self.tracker.tracks[tid] for tid in self.tracker.leftmost_first([tid for tid in self.tracker.tracks if tid not in bound])]
-        for track, person_id in zip(ordered, people):
-            current = track.id  # ids change as earlier swaps happen; follow the face itself
-            self.tracker.relabel(current, person_id)
-            self.fusion.relabel(current, person_id)
+        """Align enrolled faces by their enrolled positions, then remaining faces left-to-right."""
+        self.align_enrolled_faces()
 
     def enroll_prompt(self, cursor: int) -> dict[str, Any]:
         cursor = max(0, min(cursor, len(self.people) - 1))
         person = self.people[cursor]
+        name = person.get("name", person["id"])
         return self._message(
             self.clock(),
             "enroll_prompt",
             personId=person["id"],
             prompt=(
-                f"{person.get('name', person['id'])}, please read both sentences: "
-                "\u201cRoundtable keeps this conversation private.\u201d "
+                f"{name}, please read both sentences: "
+                f"\u201cHi, I'm {name}, and Roundtable keeps this conversation private.\u201d "
                 "\u201cEveryone at the table should be easy to follow.\u201d"
             ),
             index=cursor,
@@ -275,8 +457,10 @@ class SessionEngine:
         }
         if self.enrollment_started_at is not None:
             self.enrollment_started_at += shift
+        self._face_samples = []
+        self._last_track_count = len(self.tracker.tracks)
         self.started_monotonic = new_origin
-        self.bind_remaining_left_to_right()
+        self.align_enrolled_faces()
         # Enrollment speech is not part of the meeting: start the transcript fresh.
         self.turns = []
         self.turn_builder = TranscriptTurnBuilder()
@@ -305,9 +489,22 @@ class SessionEngine:
     def handle_faces(self, time_s: float, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
         observations = [FaceObservation.from_dict(payload) for payload in payloads]
         frame = self.tracker.update(time_s, observations)
+        # When a new face enters view (e.g. second speaker sits down right as Live starts),
+        # re-align tracks to the enrolled x positions so seats never stay inverted.
+        if len(self.tracker.tracks) != self._last_track_count:
+            self._last_track_count = len(self.tracker.tracks)
+            if self.enrolled_face_x:
+                self.align_enrolled_faces()
+                frame = [track.as_frame() for track in sorted(self.tracker.tracks.values(), key=lambda item: item.id)]
         self.recorder.record_anchor(time_s, frame)
+        cutoff = time_s - 120.0
         for track in self.tracker.tracks.values():
             self.fusion.add_sample(time_s, track.id, track.observation.mouth_score)
+            self._face_samples.append(
+                (time_s, track.id, track.smoothed.face_box.center.x, track.observation.mouth_score)
+            )
+        if len(self._face_samples) > 2500:
+            self._face_samples = [item for item in self._face_samples if item[0] >= cutoff]
         # While someone is being captioned, the glow and the map follow the caption's speaker,
         # so bubble, glow and hex map always agree; otherwise use the most active mouth.
         caption_speaker = getattr(self, "caption_speaker", None)
@@ -413,26 +610,46 @@ class SessionEngine:
         """Show still-changing words immediately so the bubble appears while someone talks."""
         speech_start = getattr(self.transcript, "_speech_start", None)
         start = speech_start if speech_start is not None else (self.turn_builder.current_start if self.turn_builder.current_start is not None else max(0.0, time_s - 1.2))
+        partial_text = " ".join(self.transcript.partial_words)
+        intro_speaker = match_self_intro(partial_text, self.people) if self.phase == "live" else None
+        if intro_speaker:
+            self.lock_speaker_identity(intro_speaker, start, time_s)
         attribution = self.fusion.attribute(max(0.0, start - 0.25), time_s)
-        # Let a clear mouth/voice match override an earlier tentative guess on the open turn.
-        if attribution.reason == "clear" and attribution.speaker_id is not None:
-            raw_speaker = attribution.speaker_id
+        cur_speaker = self.turn_builder.current_speaker
+        if intro_speaker:
+            speaker = intro_speaker
+        elif cur_speaker is not None and self.turn_builder.current_words:
+            # Only split away from the current turn's speaker when the new speaker's mouth is clear.
+            if attribution.reason == "clear" and attribution.speaker_id is not None:
+                speaker = self._named_speaker(attribution.speaker_id, time_s)
+            else:
+                speaker = cur_speaker
         else:
-            raw_speaker = attribution.speaker_id or self.turn_builder.current_speaker
-        speaker = self._named_speaker(raw_speaker, time_s)
+            speaker = self._named_speaker(attribution.speaker_id, time_s)
+
         if speaker:
             self.caption_speaker, self.caption_speaker_at = speaker, time_s
-        words = list(self.turn_builder.current_words) + list(self.transcript.partial_words)
+
+        # Never paste Speaker A's committed `current_words` into Speaker B's bubble!
+        if self.turn_builder.current_words and cur_speaker is not None and speaker != cur_speaker:
+            words = list(self.transcript.partial_words)
+            tid = turn_id(self.turn_builder.sequence + 2)
+            t_start = start
+        else:
+            words = list(self.turn_builder.current_words) + list(self.transcript.partial_words)
+            tid = turn_id(self.turn_builder.sequence + 1)
+            t_start = self.turn_builder.current_start if self.turn_builder.current_start is not None else start
+
         return self._message(
             time_s,
             "caption",
-            turnId=turn_id(self.turn_builder.sequence + 1),
+            turnId=tid,
             speakerId=speaker,
             text=" ".join(words),
-            start=self.turn_builder.current_start if self.turn_builder.current_start is not None else start,
+            start=t_start,
             end=time_s,
             partial=True,
-            confidence=attribution.confidence,
+            confidence=0.98 if intro_speaker else attribution.confidence,
         )
 
     def flush_transcript(self, time_s: float) -> list[dict[str, Any]]:
@@ -454,18 +671,26 @@ class SessionEngine:
         return messages
 
     def _add_commit(self, commit: Any, fallback_time: float, speaker_hint: str | None) -> list[dict[str, Any]]:
-        """Attribute committed words by who was moving their mouth while they were spoken."""
+        """Attribute committed words by self-intro or who moved their mouth while spoken."""
         spoken_end = commit.spoken_end if getattr(commit, "spoken_end", None) is not None else fallback_time
         spoken_start = commit.spoken_start if getattr(commit, "spoken_start", None) is not None else None
         if spoken_start is None:
             spoken_start = self.turn_builder.current_start if self.turn_builder.current_start is not None else max(0.0, spoken_end - 0.2)
-        # Argmax confirms words seconds after they are said; looking at mouths at confirmation
-        # time put every caption on whoever happened to be talking then.
-        attribution = self.fusion.attribute(spoken_start, max(spoken_end, spoken_start + 0.3))
-        speaker = self._named_speaker(speaker_hint or attribution.speaker_id, spoken_end)
+
+        intro_speaker = match_self_intro(" ".join(commit.words), self.people) if self.phase == "live" else None
+        if intro_speaker:
+            self.lock_speaker_identity(intro_speaker, spoken_start, max(spoken_end, spoken_start + 0.8))
+            speaker: str | None = intro_speaker
+            conf = 0.98
+        else:
+            # Argmax confirms words seconds after they are said; look at mouths when spoken.
+            attribution = self.fusion.attribute(spoken_start, max(spoken_end, spoken_start + 0.3))
+            speaker = self._named_speaker(speaker_hint or attribution.speaker_id, spoken_end)
+            conf = attribution.confidence
+
         if speaker:
             self.caption_speaker, self.caption_speaker_at = speaker, max(spoken_end, getattr(self, "caption_speaker_at", -99.0))
-        completed = self.turn_builder.add_words(commit.words, spoken_end, speaker, attribution.confidence)
+        completed = self.turn_builder.add_words(commit.words, spoken_end, speaker, conf)
         if self.turn_builder.current_start is not None and len(self.turn_builder.current_words) == len(commit.words):
             self.turn_builder.current_start = min(self.turn_builder.current_start, spoken_start)
         return self._finalize_turn(completed) if completed is not None else []

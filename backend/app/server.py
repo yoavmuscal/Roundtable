@@ -304,6 +304,7 @@ def create_app(
 
         command = speakerkit_command()
         checked: set[str] = set()
+        cross_hits: dict[tuple[str, str], int] = {}
         while True:
             await asyncio.sleep(4.0)
             current = engine()
@@ -314,7 +315,6 @@ def create_app(
             candidates = [
                 turn for turn in current.turns
                 if turn.id not in checked
-                and turn.confidence < 0.50
                 and turn.end <= now - 4.2
                 and turn.end - turn.start >= 0.8
             ]
@@ -362,7 +362,32 @@ def create_app(
                     continue
                 best_person, best_ov = max(cover.items(), key=lambda item: item[1])
                 share = best_ov / sum(cover.values())
-                if share >= 0.65 and best_ov >= 0.5:
+                if share < 0.65 or best_ov < 0.5 or best_person == turn.speaker_id:
+                    continue
+                mouths = current.fusion.mean_mouth(max(0.0, turn.start - 0.3), turn.end + 0.1)
+                cur_mouth = mouths.get(turn.speaker_id or "", 0.0)
+                voice_mouth = mouths.get(best_person, 0.0)
+                # Did voice strongly say A while face B's mouth was clearly moving and A's was shut?
+                if cur_mouth >= 0.22 and voice_mouth < 0.06 and turn.speaker_id:
+                    if (
+                        share >= 0.80
+                        and best_person not in current.self_intro_locked
+                        and turn.speaker_id not in current.self_intro_locked
+                    ):
+                        pair = (best_person, turn.speaker_id)
+                        cross_hits[pair] = cross_hits.get(pair, 0) + 1
+                        if cross_hits[pair] >= 2:
+                            # Seats on camera were inverted relative to voices: swap the face tracks!
+                            current._swap_tracks(best_person, turn.speaker_id)
+                            if best_person in current.tracker.tracks:
+                                current.enrolled_face_x[best_person] = current.tracker.tracks[best_person].smoothed.face_box.center.x
+                            if turn.speaker_id in current.tracker.tracks:
+                                current.enrolled_face_x[turn.speaker_id] = current.tracker.tracks[turn.speaker_id].smoothed.face_box.center.x
+                            cross_hits.clear()
+                            for outgoing in current.reassign_turn(turn.id, best_person, share):
+                                await broadcast(outgoing)
+                    continue
+                if turn.confidence < 0.50:
                     for outgoing in current.reassign_turn(turn.id, best_person, share):
                         await broadcast(outgoing)
 

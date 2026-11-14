@@ -101,19 +101,20 @@ export class MediaPipeBrowserVision {
       video.srcObject = this.stream;
       await video.play();
     }
+    const intervalMs = Math.max(50, this.options.frameIntervalMs ?? 100);
     const tick = () => {
       try {
         this.process(video);
-        this.animationFrame = window.requestAnimationFrame(tick);
       } catch (error) {
         this.options.onError?.(error instanceof Error ? error : new Error(String(error)));
       }
     };
-    this.animationFrame = window.requestAnimationFrame(tick);
+    tick();
+    this.animationFrame = window.setInterval(tick, intervalMs);
   }
 
   stop(): void {
-    if (this.animationFrame !== undefined) window.cancelAnimationFrame(this.animationFrame);
+    if (this.animationFrame !== undefined) window.clearInterval(this.animationFrame);
     this.stream?.getTracks().forEach((track) => track.stop());
     this.faceLandmarker?.close();
     this.poseLandmarker?.close();

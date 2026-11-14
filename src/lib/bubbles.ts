@@ -24,8 +24,24 @@ const tailDirection: Record<AnchorMode, Point> = {
 };
 
 export function estimateBubbleSize(_text: string, largeMode: boolean): Size {
-  // Fixed dimensions prevent the camera overlay from visually jumping as words arrive.
-  return largeMode ? { width: 330, height: 148 } : { width: 232, height: 112 };
+  // Generous height so 3-4 lines fit with zero bottom clipping while keeping width constant.
+  return largeMode ? { width: 330, height: 158 } : { width: 232, height: 124 };
+}
+
+function tailWords(text: string, maxChars: number): string {
+  const clean = text.trim();
+  if (clean.length <= maxChars) return clean;
+  const words = clean.split(/\s+/);
+  const kept: string[] = [];
+  let length = 1; // ellipsis
+  for (let idx = words.length - 1; idx >= 0; idx -= 1) {
+    const word = words[idx]!;
+    const added = kept.length ? word.length + 1 : word.length;
+    if (length + added > maxChars && kept.length > 0) break;
+    kept.unshift(word);
+    length += added;
+  }
+  return `…${kept.join(' ')}`;
 }
 
 function intersects(a: Box, b: Box): boolean {
@@ -81,7 +97,7 @@ export function layoutBubbles(
   return frames.flatMap((frame) => {
     const caption = captionsByPerson.get(frame.id);
     if (!caption) return [];
-    const text = caption.text.length > 120 ? `…${caption.text.slice(-119).trimStart()}` : caption.text;
+    const text = tailWords(caption.text, largeMode ? 76 : 88);
     const size = estimateBubbleSize(text, largeMode);
     const anchor = normalizedToStage(frame.anchor.point, stage);
     const preferred = modes.indexOf(frame.anchor.mode) >= 0 ? frame.anchor.mode : 'chest';

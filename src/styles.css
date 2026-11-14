@@ -318,7 +318,9 @@ kbd {
   position: absolute;
   z-index: 5;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
   border: 1.5px solid;
   border-radius: 14px;
   padding: 0.6rem 0.85rem;
@@ -327,11 +329,11 @@ kbd {
   color: var(--text);
   font-size: 0.875rem;
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.32;
   transition: left 100ms linear, top 100ms linear, opacity 150ms linear;
 }
-.speech-bubble.large { font-size: 1.35rem; line-height: 1.22; padding: 0.85rem 1rem; font-weight: 600; }
-.speech-bubble > span { display: -webkit-box; overflow: hidden; width: 100%; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.speech-bubble.large { font-size: 1.3rem; line-height: 1.22; padding: 0.8rem 1rem; font-weight: 600; }
+.speech-bubble > span { display: block; width: 100%; overflow-wrap: break-word; }
 .speech-bubble strong { color: #fff; font-weight: 800; }
 .speech-bubble.low-confidence { border-style: dashed; }
 .speech-bubble.mentioned { border-width: 2.5px; }
