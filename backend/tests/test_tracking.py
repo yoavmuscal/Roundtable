@@ -49,10 +49,25 @@ def test_chair_swap_after_absence_reidentifies_by_shirt() -> None:
     assert positions["p2"] == pytest.approx(0.45, abs=0.01)
 
 
-def test_away_after_two_seconds() -> None:
+def test_enrolled_return_matches_closest_missing_person() -> None:
+    tracker = PersonTracker(expected_people=2)
+    tracker.lock_to_expected = True
+    tracker.allowed_ids = ["p1", "p2"]
+    tracker.update(0.0, [obs(0.30, 0), obs(0.70, 8)])
+    tracker.update(6.0, [])
+    frame = tracker.update(6.2, [obs(0.34, 20)])
+    positions = {item["id"]: item["faceBox"]["x"] + item["faceBox"]["width"] / 2 for item in frame}
+    assert positions["p1"] == pytest.approx(0.34, abs=0.03)
+    assert tracker.tracks["p2"].state == "away"
+
+
+def test_away_after_five_seconds() -> None:
     tracker = PersonTracker(expected_people=2)
     tracker.update(0.0, [obs(0.3, 0), obs(0.6, 8)])
-    frame = tracker.update(2.1, [obs(0.6, 8)])
+    frame = tracker.update(4.9, [obs(0.6, 8)])
+    states = {item["id"]: item["state"] for item in frame}
+    assert states["p1"] == "seated"
+    frame = tracker.update(5.1, [obs(0.6, 8)])
     states = {item["id"]: item["state"] for item in frame}
     assert states["p1"] == "away"
     assert states["p2"] == "seated"

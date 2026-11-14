@@ -24,7 +24,7 @@ def test_fake_session_matches_expected_replay_behavior(tmp_path: Path) -> None:
     assert any(item.get("nameAlert") for item in final_captions)
     away_frames = [
         item for item in events
-        if item["type"] == "people_frame" and item["time"] >= 61.1
+        if item["type"] == "people_frame" and 63.9 <= item["time"] <= 64.0
     ]
     assert any(
         person["id"] == "p2" and person["state"] == "away"

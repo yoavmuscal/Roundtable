@@ -261,11 +261,15 @@ class PersonTracker:
             for index, observation in enumerate(observations):
                 d = distance(track.smoothed.face_box.center, observation.face_box.center)
                 similarity = histogram_similarity(track.smoothed.shirt_histogram, observation.shirt_histogram)
-                if d > self.thresholds["tracker_match_distance"]:
+                # Enrolled rooms trust position: a returning face may have a different shirt crop.
+                enrolled = self.lock_to_expected
+                limit = 0.45 if enrolled and track.state == "away" else self.thresholds["tracker_match_distance"]
+                if d > limit:
                     continue
-                if track.state == "away" and similarity < self.thresholds["tracker_reidentify_similarity"]:
+                if track.state == "away" and not enrolled and similarity < self.thresholds["tracker_reidentify_similarity"]:
                     continue
-                costs[(track_id, index)] = d + 0.25 * (1.0 - similarity)
+                shirt_weight = 0.08 if enrolled else 0.25
+                costs[(track_id, index)] = d + shirt_weight * (1.0 - similarity)
 
         best_cost = float("inf")
         best: dict[str, int] = {}

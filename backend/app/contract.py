@@ -66,7 +66,7 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "reach_cap_scale_m": 0.7,
     "tracker_match_distance": 0.15,
     "tracker_reidentify_similarity": 0.8,
-    "tracker_away_after_s": 2.0,
+    "tracker_away_after_s": 5.0,
     "tracker_newcomer_after_s": 3.0,
     "seat_follow_distance_m": 0.5,
     "seat_follow_after_s": 3.0,
