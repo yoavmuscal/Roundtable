@@ -55,7 +55,7 @@ def argmax_binary() -> str | None:
     return None
 
 
-def transcriber_command() -> list[str]:
+def transcriber_command(names: list[str] | None = None) -> list[str]:
     configured = os.environ.get("ROUNDTABLE_ARGMAX_COMMAND", "")
     if configured:
         return shlex.split(configured)
@@ -63,7 +63,11 @@ def transcriber_command() -> list[str]:
     if not binary:
         return []
     # Without --word-timestamps, argmax-cli 1.1.1 streams only "No word timings found".
-    return [binary, "transcribe", "--stream", "--word-timestamps", "--model", WHISPER_MODEL]
+    command = [binary, "transcribe", "--stream", "--word-timestamps", "--model", WHISPER_MODEL]
+    hint = ", ".join(name.strip() for name in (names or []) if name and name.strip())
+    if hint:
+        command.extend(["--prompt", hint])
+    return command
 
 
 def speakerkit_command() -> list[str]:
@@ -197,7 +201,7 @@ def create_app(
         return app.state.engine
 
     async def stream_transcriber() -> None:
-        command = transcriber_command()
+        command = transcriber_command([str(person.get("name", "")) for person in engine().people])
         if mode != "live":
             return
         if not command:

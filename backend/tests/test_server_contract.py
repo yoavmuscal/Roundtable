@@ -141,3 +141,16 @@ def test_demo_replay_opens_the_refined_recording(tmp_path: Path) -> None:
     assert seen["refined"]["refined"]["turns"]
     assert client.app.state.engine.phase == "review"
     assert client.app.state.engine.turns
+
+
+def test_transcriber_prompt_lists_enrolled_names() -> None:
+    import os
+
+    from backend.app.server import transcriber_command
+
+    if os.environ.get("ROUNDTABLE_ARGMAX_COMMAND"):
+        return
+    command = transcriber_command(["Yoav", " Cello "])
+    if not command:
+        return
+    assert command[command.index("--prompt") + 1] == "Yoav, Cello"
