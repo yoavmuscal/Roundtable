@@ -118,7 +118,8 @@ export const useRoundtableStore = create<RoundtableState>((set, get) => ({
         set({ people: message.people });
         break;
       case 'phase':
-        set({ phase: message.phase });
+        // Entering Review without a refined result means refine just started: clear the old one.
+        set(message.phase === 'review' && state.phase !== 'review' ? { phase: message.phase, refined: undefined } : { phase: message.phase });
         break;
       case 'replay':
         set({ replay: message });

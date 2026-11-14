@@ -182,10 +182,9 @@ def internal_to_ui(message: dict[str, Any]) -> dict[str, Any] | None:
             },
         }
     if message_type == "phase":
-        # The UI shows refine as a progress overlay on live, then switches to review.
-        if message.get("phase") == "refine":
-            return None
-        return {"type": "phase", "phase": message.get("phase", "setup")}
+        # Refine runs on the Review screen (progress ring) so Stop visibly ends Live at once.
+        phase = message.get("phase", "setup")
+        return {"type": "phase", "phase": "review" if phase == "refine" else phase}
     if message_type == "refine_progress":
         return {
             "type": "refine-progress",

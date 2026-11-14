@@ -36,6 +36,18 @@ class SpeakerFusion:
         cutoff = time_s - 120.0
         self.samples = [sample for sample in self.samples if sample.time >= cutoff]
 
+    def relabel(self, a: str, b: str) -> None:
+        """Swap two person ids in the stored mouth history (after a track is renamed)."""
+        swap = {a: b, b: a}
+        self.samples = [MouthSample(item.time, swap.get(item.person_id, item.person_id), item.score) for item in self.samples]
+
+    def mean_mouth(self, start_s: float, end_s: float) -> dict[str, float]:
+        totals: dict[str, list[float]] = {}
+        for sample in self.samples:
+            if start_s <= sample.time <= end_s:
+                totals.setdefault(sample.person_id, []).append(sample.score)
+        return {person: sum(values) / len(values) for person, values in totals.items() if values}
+
     def attribute(self, start_s: float, end_s: float) -> Attribution:
         window_start = start_s - 0.2
         totals: dict[str, list[float]] = defaultdict(list)

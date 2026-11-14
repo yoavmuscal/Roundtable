@@ -200,10 +200,31 @@ class PersonTracker:
         seat_mapper: Callable[[Point], Point] | None = None,
     ) -> None:
         self.expected_people = expected_people
+        self.lock_to_expected = False  # live sessions: never invent people beyond the enrolled list
+        self.allowed_ids: list[str] = []  # enrolled person ids, in enrollment order
         self.thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
         self.seat_mapper = seat_mapper
         self.tracks: dict[str, TrackedPerson] = {}
         self.candidates: list[NewcomerCandidate] = []
+
+    def relabel(self, track_id: str, person_id: str) -> None:
+        """Give a face track a person's id (swapping with whichever track had it)."""
+        if track_id == person_id or track_id not in self.tracks:
+            return
+        moving = self.tracks.pop(track_id)
+        displaced = self.tracks.pop(person_id, None)
+        moving.id = person_id
+        self.tracks[person_id] = moving
+        if displaced is not None:
+            displaced.id = track_id
+            self.tracks[track_id] = displaced
+
+    def leftmost_first(self, track_ids: list[str]) -> list[str]:
+        """Track ids ordered by where the face is, left to right in the camera image."""
+        def x(track_id: str) -> float:
+            track = self.tracks[track_id]
+            return track.smoothed.face_box.center.x if track.smoothed else 0.5
+        return sorted(track_ids, key=x)
 
     def expect_person(self) -> None:
         self.expected_people = min(4, self.expected_people + 1)
@@ -216,9 +237,18 @@ class PersonTracker:
         for track_id, track in self.tracks.items():
             if track_id not in assignments:
                 track.mark_unseen(time_s, self.thresholds["tracker_away_after_s"])
+        free_tracks = [track_id for track_id in sorted(self.tracks) if track_id not in assignments]
         for detection_index in unmatched:
             if len(self.tracks) < self.expected_people:
                 self._create_track(observations[detection_index], time_s)
+            elif self.lock_to_expected:
+                # Only the enrolled people are tracked: an unmatched face must be one of the
+                # tracks that lost it (moved, turned, re-lit), never a new p3/p4.
+                if free_tracks:
+                    center = observations[detection_index].face_box.center
+                    track_id = min(free_tracks, key=lambda tid: distance(self.tracks[tid].smoothed.face_box.center, center) if self.tracks[tid].smoothed else 1.0)
+                    free_tracks.remove(track_id)
+                    self.tracks[track_id].update(observations[detection_index], time_s, self.seat_mapper, self.thresholds)
             else:
                 self._update_newcomer(observations[detection_index], time_s)
         return [track.as_frame() for track in sorted(self.tracks.values(), key=lambda item: item.id)]
@@ -266,7 +296,13 @@ class PersonTracker:
     def _create_track(self, observation: FaceObservation, time_s: float) -> TrackedPerson | None:
         if len(self.tracks) >= 4:
             return None
-        person_id = f"p{len(self.tracks) + 1}"
+        if self.allowed_ids:
+            free = [person_id for person_id in self.allowed_ids if person_id not in self.tracks]
+            if not free:
+                return None
+            person_id = free[0]
+        else:
+            person_id = f"p{len(self.tracks) + 1}"
         track = TrackedPerson(
             id=person_id,
             observation=observation,

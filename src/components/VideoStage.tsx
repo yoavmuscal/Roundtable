@@ -7,6 +7,7 @@ import { roundtableClient } from '../services/roundtableClient';
 import { useRoundtableStore } from '../state/store';
 import { MediaPipeBrowserVision, listCameras } from '../vision/MediaPipeVision';
 import { describeCameraError } from '../lib/cameraErrors';
+import { currentSentence } from '../lib/captions';
 import { sendVisionObservations } from '../vision/visionBridge';
 
 const STAGE = { width: 752, height: 424 };
@@ -157,7 +158,10 @@ export function VideoStage() {
     const byPerson = new Map<string, Caption>();
     Object.entries(latestByPerson).forEach(([personId, captionId]) => {
       const caption = captions[captionId];
-      if (caption && sessionTime - (caption.end ?? caption.start) <= 3.5) byPerson.set(personId, caption);
+      if (caption && sessionTime - (caption.end ?? caption.start) <= 3.5) {
+        // One sentence at a time: the previous sentence goes away when the next one starts.
+        byPerson.set(personId, { ...caption, text: currentSentence(caption.text) });
+      }
     });
     return byPerson;
   }, [captions, latestByPerson, sessionTime]);
@@ -279,7 +283,7 @@ export function VideoStage() {
       })}
       {unattributed ? (
         <div className={largeCaptions ? 'stage-subtitle large' : 'stage-subtitle'} role="status" aria-live="polite">
-          <CaptionText text={unattributed.text.length > 110 ? `…${unattributed.text.slice(-109)}` : unattributed.text} people={people} />
+          <CaptionText text={currentSentence(unattributed.text)} people={people} />
         </div>
       ) : null}
       {offCameraSpeaking ? (

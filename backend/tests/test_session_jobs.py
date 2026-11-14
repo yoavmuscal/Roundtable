@@ -71,3 +71,52 @@ def test_uncalibrated_camera_seats_people_along_the_far_edge() -> None:
     right = engine.tracker.seat_mapper(Point(0.75, 0.6))
     assert (left.x, left.y) == (0.45, -0.45)
     assert (right.x, right.y) == (1.35, -0.45)
+
+
+def _face(x: float, mouth: float, shirt: int) -> dict:
+    return {
+        "faceBox": {"x": x - 0.04, "y": 0.36, "width": 0.08, "height": 0.08},
+        "mouthScore": mouth,
+        "jawVariation": mouth * 0.08,
+        "shoulderPoint": {"x": x, "y": 0.52},
+        "chestPoint": {"x": x, "y": 0.64},
+        "headTopPoint": {"x": x, "y": 0.33},
+        "torsoVisible": True,
+        "shirtHistogram": [1.0 if i == shirt else 0.0 for i in range(32)],
+    }
+
+
+def test_enrollment_binds_names_to_the_face_that_spoke() -> None:
+    from backend.app.session import SessionEngine
+
+    engine = SessionEngine()
+    # Two enrolled people, Maya removed: ids p1 and p3, never an invented p2/p4.
+    engine.set_enrolled_people([
+        {"id": "p1", "name": "Yoav", "aliases": [], "color": "#8B7CF6", "shape": "circle"},
+        {"id": "p3", "name": "Lee", "aliases": [], "color": "#F5A524", "shape": "diamond"},
+    ])
+    engine.begin_enrollment(0.0)
+    # Lee sits on the left but Yoav reads first: the right face's mouth moves.
+    for step in range(30):
+        t = step / 10
+        engine.handle_faces(t, [_face(0.3, 0.02, 0), _face(0.7, 0.8, 8), _face(0.5, 0.0, 16)])
+    engine.record_enrollment("p1", 3.0)
+    for step in range(30, 60):
+        t = step / 10
+        engine.handle_faces(t, [_face(0.3, 0.8, 0), _face(0.7, 0.02, 8), _face(0.5, 0.0, 16)])
+    engine.record_enrollment("p3", 6.0)
+    assert set(engine.tracker.tracks) == {"p1", "p3"}  # a third face is never tracked
+    assert engine.tracker.tracks["p1"].smoothed.face_box.center.x > 0.6
+    assert engine.tracker.tracks["p3"].smoothed.face_box.center.x < 0.4
+
+
+def test_unbound_people_take_faces_left_to_right() -> None:
+    from backend.app.session import SessionEngine
+
+    engine = SessionEngine()
+    engine.set_enrolled_people(engine.people[:2])
+    for step in range(5):
+        engine.handle_faces(step / 10, [_face(0.7, 0.0, 8), _face(0.3, 0.0, 0)])
+    engine.start()
+    assert engine.tracker.tracks["p1"].smoothed.face_box.center.x < 0.5
+    assert engine.tracker.tracks["p2"].smoothed.face_box.center.x > 0.5

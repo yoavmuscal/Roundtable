@@ -79,7 +79,7 @@ def test_backend_events_match_yoav_ui_wire_contract() -> None:
         }
     )
     assert map_message["hexes"] == [{"q": 1, "r": -2, "ownerId": "p1", "opacity": 0.5, "share": 0.8, "contested": False}]
-    assert internal_to_ui({"type": "phase", "phase": "refine"}) is None
+    assert internal_to_ui({"type": "phase", "phase": "refine"}) == {"type": "phase", "phase": "review"}
     refined = internal_to_ui(
         {
             "type": "refined",
