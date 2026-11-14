@@ -26,6 +26,7 @@ class SessionRecorder:
     def __init__(self, session_dir: Path | None) -> None:
         self.session_dir = session_dir
         self.events_path: Path | None = None
+        self.anchor_rows: list[dict[str, Any]] = []
         if session_dir is not None:
             session_dir.mkdir(parents=True, exist_ok=True)
             self.events_path = session_dir / "events.jsonl"
@@ -36,6 +37,24 @@ class SessionRecorder:
             return
         with self.events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(message, separators=(",", ":")) + "\n")
+
+    def record_anchor(self, time_s: float, people_frame: list[dict[str, Any]]) -> None:
+        self.anchor_rows.append(
+            {
+                "time": round(time_s, 3),
+                "anchors": {
+                    str(person.get("id")): person.get("captionAnchor")
+                    for person in people_frame
+                },
+            }
+        )
+
+    def write_anchors(self) -> None:
+        if self.session_dir is not None:
+            (self.session_dir / "anchors.jsonl").write_text(
+                "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in self.anchor_rows),
+                encoding="utf-8",
+            )
 
     def write_metadata(self, metadata: dict[str, Any]) -> None:
         if self.session_dir is not None:
@@ -59,6 +78,8 @@ class SessionEngine:
 
     def __post_init__(self) -> None:
         self.recorder = SessionRecorder(self.session_dir)
+        self.started_wall = time.time()
+        self.recording_offsets = {"audioS": 0.0, "videoS": 0.0}
         self.tracker = PersonTracker(thresholds=self.thresholds)
         self.fusion = SpeakerFusion(self.thresholds)
         self.active_gate = ActiveSpeakerGate()
@@ -116,6 +137,7 @@ class SessionEngine:
     def handle_faces(self, time_s: float, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
         observations = [FaceObservation.from_dict(payload) for payload in payloads]
         frame = self.tracker.update(time_s, observations)
+        self.recorder.record_anchor(time_s, frame)
         for track in self.tracker.tracks.values():
             self.fusion.add_sample(time_s, track.id, track.observation.mouth_score)
         proposed = self._strongest_visible_speaker(time_s)
@@ -271,6 +293,20 @@ class SessionEngine:
         for message in messages:
             self.recorder.record(message)
         self.recorder.write_turns("live_transcript.jsonl", self.turns)
+        self.recorder.write_anchors()
+        self.recorder.write_metadata(
+            {
+                "name": self.session_dir.name if self.session_dir else "live-session",
+                "startedAtUnix": self.started_wall,
+                "durationS": stop_time,
+                "people": self.people,
+                "calibration": self.calibration.result() if self.calibration else None,
+                "recordingOffsets": self.recording_offsets,
+                "audioFile": "audio.wav",
+                "videoFile": "video.webm",
+                "anchorTrackFile": "anchors.jsonl",
+            }
+        )
         return messages
 
     def clock(self) -> float:

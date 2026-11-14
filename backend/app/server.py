@@ -9,7 +9,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .audio import MicrophoneLevelMonitor
@@ -160,6 +160,17 @@ def create_app(
     @app.get("/transcript")
     async def transcript() -> dict[str, Any]:
         return {"turns": [turn.as_dict() for turn in engine().turns]}
+
+    @app.post("/session/video")
+    async def upload_video(request: Request) -> dict[str, Any]:
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="empty video upload")
+        session_dir.mkdir(parents=True, exist_ok=True)
+        video_path = session_dir / "video.webm"
+        video_path.write_bytes(body)
+        engine().recording_offsets["videoS"] = float(request.headers.get("x-recording-start-s", "0"))
+        return {"ok": True, "videoPath": str(video_path), "bytes": len(body)}
 
     @app.post("/export")
     async def export() -> dict[str, Any]:

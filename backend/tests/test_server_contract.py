@@ -51,6 +51,39 @@ def test_backend_websocket_speaks_ui_contract(tmp_path: Path) -> None:
         assert answer["answer"]["text"]
 
 
+def test_video_upload_and_session_artifacts(tmp_path: Path) -> None:
+    session = tmp_path / "live"
+    app = create_app(mode="sim", session_dir=session, sim_session_dir=tmp_path / "fake")
+    client = TestClient(app)
+    response = client.post(
+        "/session/video",
+        content=b"webm-bytes",
+        headers={"x-recording-start-s": "0.125"},
+    )
+    assert response.status_code == 200
+    assert (session / "video.webm").read_bytes() == b"webm-bytes"
+    engine = app.state.engine
+    engine.handle_faces(
+        0.0,
+        [
+            {
+                "faceBox": {"x": 0.2, "y": 0.2, "width": 0.1, "height": 0.1},
+                "mouthScore": 0.1,
+                "jawVariation": 0.0,
+                "shoulderPoint": {"x": 0.25, "y": 0.4},
+                "chestPoint": {"x": 0.25, "y": 0.5},
+                "headTopPoint": {"x": 0.25, "y": 0.15},
+                "torsoVisible": True,
+                "shirtHistogram": [1.0],
+            }
+        ],
+    )
+    engine.stop(1.0)
+    assert (session / "anchors.jsonl").exists()
+    metadata = (session / "metadata.json").read_text(encoding="utf-8")
+    assert '"videoS": 0.125' in metadata
+
+
 def test_export_endpoint_writes_ass_for_recorded_session(tmp_path: Path) -> None:
     session = tmp_path / "session"
     generate_session(session, include_video=False)
