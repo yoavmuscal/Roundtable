@@ -116,13 +116,15 @@ class HexCell(TypedDict, total=False):
     contested: bool
 
 
-class StatusPayload(TypedDict):
+class StatusPayload(TypedDict, total=False):
     model: str
     secondsPerTurn: float
     ramGb: float
     network: NetworkState
     backend: BackendMode
     connected: bool
+    # Argmax streaming transcriber: off, loading (model warming ~20 s) or listening.
+    transcriberState: Literal["off", "loading", "listening"]
 
 
 class RefinedPayload(TypedDict):

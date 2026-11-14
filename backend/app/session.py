@@ -107,6 +107,21 @@ class SessionEngine:
         self.recorder.record(message)
         return message
 
+    def use_horizontal_seating(self, seat_offset_m: float = 0.45) -> None:
+        """Seat people along the far edge by where they appear left-to-right in the camera.
+
+        Used until the table is calibrated for this camera: projecting through a default
+        calibration put laptop-camera users behind the camera and made the map jump.
+        """
+        if self.calibration is None:
+            return
+        width = self.calibration.table_size.width_m
+
+        def seat(shoulder: Point) -> Point:
+            return Point(min(1.0, max(0.0, shoulder.x)) * width, -seat_offset_m)
+
+        self.tracker.seat_mapper = seat
+
     def begin_enrollment(self, time_s: float) -> None:
         self.enrollment_started_at = time_s
 
@@ -168,6 +183,14 @@ class SessionEngine:
         if self.enrollment_started_at is not None:
             self.enrollment_started_at += shift
         self.started_monotonic = new_origin
+        # Enrollment speech is not part of the meeting: start the transcript fresh.
+        self.turns = []
+        self.turn_builder = TranscriptTurnBuilder()
+        self.transcript = StreamingTranscriptParser()
+        self.transcript.baseline_pending = True
+        self.questions = OpenQuestionTracker()
+        if self.calibration is not None:
+            self.heat = HeatMap(HexGrid(self.calibration.table_size.width_m, self.calibration.table_size.height_m))
         messages = [
             self._message(0.0, "phase", phase="live"),
             self._message(0.0, "people", people=self.people),

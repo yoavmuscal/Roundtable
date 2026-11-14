@@ -8,6 +8,13 @@ export function EnrollScreen() {
   const people = useRoundtableStore((state) => state.people);
   const setPeopleNames = useRoundtableStore((state) => state.setPeopleNames);
   const enrollPrompt = useRoundtableStore((state) => state.enrollPrompt);
+  const level = useRoundtableStore((state) => state.level);
+  const status = useRoundtableStore((state) => state.status);
+  const heard = useRoundtableStore((state) => {
+    const latest = Object.values(state.captions).sort((a, b) => (b.end ?? b.start) - (a.end ?? a.start))[0];
+    return latest?.text;
+  });
+  const listening = status.transcriberState === 'listening';
   const setPhase = useRoundtableStore((state) => state.setPhase);
   const [aliases, setAliases] = useState<Record<string, string>>({});
 
@@ -24,6 +31,18 @@ export function EnrollScreen() {
   const start = () => {
     const enrolled = withAliases();
     setPeopleNames(enrolled);
+    // Enrollment speech is not part of the meeting.
+    useRoundtableStore.setState({
+      captions: {},
+      latestByPerson: {},
+      history: [],
+      talkShares: [],
+      openQuestions: [],
+      overdueQuestions: [],
+      mapHexes: [],
+      answer: undefined,
+      refined: undefined,
+    });
     roundtableClient.control('start', JSON.stringify(enrolled));
     setPhase('live');
   };
@@ -43,6 +62,15 @@ export function EnrollScreen() {
               {enrollPrompt.index + 1} of {enrollPrompt.total}
             </span>
             <strong>{enrollPrompt.prompt}</strong>
+            <em className="enroll-heard">
+              {status.backend !== 'live'
+                ? 'Replay mode: voice enrollment runs only in live mode.'
+                : !listening
+                  ? 'Argmax is loading Whisper (about 20 s)…'
+                  : heard
+                    ? `Heard: “${heard}”`
+                    : 'Listening… speak now.'}
+            </em>
           </div>
         ) : null}
         <div className="button-row">
@@ -97,8 +125,13 @@ export function EnrollScreen() {
                 placeholder="e.g. Yoyo"
               />
             </label>
-            <div className="voice-meter" aria-label={`Voice sample status for ${person.name}`}>
-              <span style={{ width: `${enrollPrompt?.personId === person.id ? 70 : 100}%`, background: person.color }} />
+            <div className="voice-meter" aria-label={`Live microphone level for ${person.name}`}>
+              <span
+                style={{
+                  width: `${enrollPrompt?.personId === person.id ? Math.min(100, Math.round(level * 900)) : 0}%`,
+                  background: person.color,
+                }}
+              />
             </div>
           </article>
         ))}

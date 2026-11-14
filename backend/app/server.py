@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import shlex
@@ -33,6 +34,15 @@ from .ui_adapter import browser_to_internal, internal_to_ui
 
 DIST_DIR = Path(__file__).resolve().parents[2] / "dist"
 WHISPER_MODEL = os.environ.get("ROUNDTABLE_WHISPER_MODEL", "base")
+
+
+def is_default_calibration(calibration: Calibration | None) -> bool:
+    """True when nobody calibrated this camera (default demo corners)."""
+    if calibration is None:
+        return True
+    return all(
+        abs(a.x - b.x) < 1e-3 and abs(a.y - b.y) < 1e-3 for a, b in zip(calibration.corners, FAKE_CORNERS)
+    )
 
 
 def argmax_binary() -> str | None:
@@ -112,7 +122,15 @@ def create_app(
             generate_session(sim_session_dir, include_video=True)
         return mount_ui(create_replay_app(sim_session_dir))
 
-    app = FastAPI(title="Roundtable Backend", version=str(CONTRACT_VERSION))
+    @contextlib.asynccontextmanager
+    async def lifespan(app_: FastAPI):
+        yield
+        # Ctrl+C / SIGTERM: stop Argmax and release the microphone so nothing is orphaned.
+        shutdown = getattr(app_.state, "shutdown", None)
+        if shutdown is not None:
+            await shutdown()
+
+    app = FastAPI(title="Roundtable Backend", version=str(CONTRACT_VERSION), lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -127,6 +145,7 @@ def create_app(
     app.state.sim_task = None
     app.state.transcriber_task = None
     app.state.tick_task = None
+    app.state.transcriber_state = "off"  # off | loading | listening
     app.state.audio_monitor = None
     app.state.warmed = False
 
@@ -141,6 +160,7 @@ def create_app(
         payload = status_message(model=model_label(), seconds_per_turn=seconds_per_turn)
         payload["backend"] = "live" if mode == "live" else "simulation"
         payload["transcriber"] = " ".join(transcriber_command()[:1]) or None
+        payload["transcriberState"] = app.state.transcriber_state
         return {**payload, **extra}
 
     async def warm_bonsai() -> None:
@@ -172,17 +192,34 @@ def create_app(
             return
         adapter = ArgmaxTranscriberAdapter(command)
         session_dir.mkdir(parents=True, exist_ok=True)
-        # Raw CLI bytes are kept per session for debugging and as parser fixtures.
-        raw_log = (session_dir / "transcriber_raw.txt").open("wb")
+        # Raw CLI bytes are kept for debugging and as parser fixtures.
+        raw_log = (session_dir / "transcriber_raw.txt").open("ab")
+        app.state.transcriber_state = "loading"
+        await broadcast(SessionEngine._message(engine().clock(), "status", **current_status()))
         try:
             async for _, chunk in adapter.stream():
                 raw_log.write(chunk)
                 raw_log.flush()
-                for message in engine().handle_transcript_chunk(chunk, engine().clock()):
+                if app.state.transcriber_state != "listening" and (b"Transcribing audio stream" in chunk or b"---" in chunk):
+                    # Whisper finished loading (about 20 s): tell the UI it is safe to talk.
+                    app.state.transcriber_state = "listening"
+                    await broadcast(SessionEngine._message(engine().clock(), "status", **current_status()))
+                current = engine()
+                # Argmax keeps running between sessions; only enrollment and live sessions use its text.
+                if current.phase not in {"enroll", "live"}:
+                    continue
+                for message in current.handle_transcript_chunk(chunk, current.clock()):
                     await broadcast(message)
         finally:
             raw_log.close()
+            app.state.transcriber_state = "off"
             await adapter.stop()
+
+    def ensure_transcriber() -> None:
+        """Start Argmax once and keep it warm, so Start never waits on the model load."""
+        task = app.state.transcriber_task
+        if mode == "live" and (task is None or task.done()):
+            app.state.transcriber_task = asyncio.create_task(stream_transcriber())
 
     async def refine_after_stop() -> None:
         current = engine()
@@ -293,6 +330,7 @@ def create_app(
                 current = engine()
                 if message_type == "hello":
                     asyncio.create_task(warm_bonsai())
+                    ensure_transcriber()  # Whisper takes ~20 s to load; start before anyone needs it
                     for outgoing in (
                         {"type": "phase", "time": current.clock(), "phase": current.phase},
                         {"type": "people", "time": current.clock(), "people": current.people},
@@ -380,11 +418,13 @@ def create_app(
             for message in current.tick(current.clock()):
                 await broadcast(message)
             beats += 1
+            if beats % 4 == 0:
+                await broadcast(current.stats(current.clock()))
             if beats % 20 == 0:
                 await broadcast(SessionEngine._message(current.clock(), "status", **current_status()))
 
     async def stop_live_tasks(stop_audio: bool = True) -> None:
-        for name in ("transcriber_task", "tick_task"):
+        for name in ("tick_task",):
             task = getattr(app.state, name)
             if task is not None and not task.done():
                 task.cancel()
@@ -396,6 +436,16 @@ def create_app(
         if stop_audio and app.state.audio_monitor is not None:
             await app.state.audio_monitor.stop()
             app.state.audio_monitor = None
+
+    async def shutdown_live() -> None:
+        await stop_live_tasks(stop_audio=True)
+        task = app.state.transcriber_task
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
+    app.state.shutdown = shutdown_live
 
     async def ensure_live_audio() -> None:
         if mode != "live" or app.state.audio_monitor is not None:
@@ -441,8 +491,8 @@ def create_app(
 
                 app.state.sim_task = asyncio.create_task(run_and_refine())
             else:
-                transcriber = app.state.transcriber_task
-                if current.phase == "live" and transcriber is not None and not transcriber.done():
+                ticker = app.state.tick_task
+                if current.phase == "live" and ticker is not None and not ticker.done():
                     # Already running: rejoin instead of restarting (a restart reloads Whisper for ~20 s).
                     await broadcast(SessionEngine._message(current.clock(), "phase", phase="live"))
                     await broadcast(SessionEngine._message(current.clock(), "people", people=current.people))
@@ -467,15 +517,19 @@ def create_app(
                         pass
                 if current.calibration is None:
                     current.set_calibration(Calibration(FAKE_CORNERS, FAKE_TABLE))
+                if is_default_calibration(current.calibration):
+                    current.use_horizontal_seating()
                 await ensure_live_audio()
                 for outgoing in current.start():
                     await broadcast(outgoing)
                 monitor = app.state.audio_monitor
                 if monitor is not None:
                     current.recording_offsets["audioS"] = round(current.started_monotonic - monitor.started_wall_monotonic, 3)
-                app.state.transcriber_task = asyncio.create_task(stream_transcriber())
+                ensure_transcriber()
                 app.state.tick_task = asyncio.create_task(live_ticker())
         elif action == "stop":
+            if mode == "live" and current.phase != "live":
+                return  # a second Stop click must not run refine twice
             if app.state.sim_task and not app.state.sim_task.done():
                 app.state.sim_task.cancel()
                 app.state.sim_task = None
@@ -523,6 +577,7 @@ def create_app(
             app.state.enroll_cursor = 0
             current.enrollment_intervals = {}
             await ensure_live_audio()
+            ensure_transcriber()
             current.begin_enrollment(current.clock())
             await broadcast(SessionEngine._message(current.clock(), "phase", phase="enroll"))
             await broadcast(current.enroll_prompt(0))

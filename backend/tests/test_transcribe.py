@@ -112,3 +112,16 @@ def test_waiting_for_speech_is_not_a_caption() -> None:
     parser.feed_chunk("Transcribing audio stream, press Ctrl+C to stop.\n---\nCurrent text: Waiting for speech...\n", 0.0)
     assert parser.partial_words == ()
     assert parser.flush(2.0) is None
+
+
+def test_baseline_skips_text_confirmed_before_the_session() -> None:
+    parser = StreamingTranscriptParser()
+    parser.baseline_pending = True
+    earlier = "---\nConfirmed segment: <|0.00|> Roundtable keeps this conversation private.<|2.0|>\nCurrent text: \n"
+    assert parser.feed_chunk(earlier, 0.0) == []
+    later = (
+        "---\nConfirmed segment: <|0.00|> Roundtable keeps this conversation private.<|2.0|>\n"
+        "Confirmed segment: <|0.00|> Any thoughts on the demo?<|2.0|>\nCurrent text: \n"
+    )
+    commits = parser.feed_chunk(later, 1.0)
+    assert [word for commit in commits for word in commit.words] == "Any thoughts on the demo?".split()

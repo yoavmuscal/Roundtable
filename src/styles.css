@@ -595,3 +595,21 @@ h1 { margin-bottom: 1rem; font-size: clamp(1.8rem, 3.4vw, 2.9rem); line-height: 
 }
 .stage-subtitle.large { font-size: 1.35rem; }
 .review-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+
+.enroll-heard { display: block; margin-top: 0.55rem; color: var(--text-soft); font-size: 0.82rem; font-style: normal; }
+.voice-meter span { transition: width 80ms linear; }
+.argmax-loading {
+  position: absolute;
+  z-index: 7;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(245, 165, 36, 0.55);
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+  background: rgba(245, 165, 36, 0.14);
+  color: #ffd79a;
+  font-size: 0.74rem;
+  font-weight: 600;
+  white-space: nowrap;
+}

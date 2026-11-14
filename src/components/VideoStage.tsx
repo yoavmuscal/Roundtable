@@ -195,7 +195,10 @@ export function VideoStage() {
       <div className="dot-grid" aria-hidden="true" />
       <div className="stage-horizon" aria-hidden="true" />
       <div className="table-plane" aria-hidden="true" />
-      <div className="stage-pill"><span /> {cameraActive ? 'LIVE · iPhone cam' : replay ? 'REPLAY' : 'LIVE · cam 1'}</div>
+      <div className="stage-pill"><span /> {replay ? 'REPLAY' : status.backend === 'live' ? `LIVE · Argmax ${status.transcriberState === 'listening' ? 'listening' : 'loading…'}` : 'LIVE · cam 1'}</div>
+      {status.backend === 'live' && status.transcriberState !== 'listening' && frames.length > 0 ? (
+        <div className="argmax-loading" role="status">Argmax is loading Whisper (about 20 s). Start talking when the badge says listening.</div>
+      ) : null}
       <div className="stage-note">Captions pinned to chest</div>
       {frames.length === 0 && !mediaActive ? (
         <div className="stage-placeholder">

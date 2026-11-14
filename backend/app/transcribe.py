@@ -44,6 +44,9 @@ class StreamingTranscriptParser:
         self.last_update: float | None = None
         self.block_mode = False
         self._buffer = ""
+        # When Argmax keeps running across sessions it reprints everything it already
+        # confirmed; the first block after a reset only sets the baseline.
+        self.baseline_pending = False
 
     def feed_chunk(self, chunk: bytes | str, time_s: float) -> list[TranscriptCommit]:
         text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
@@ -100,6 +103,10 @@ class StreamingTranscriptParser:
         confirmed_words = tuple(" ".join(confirmed).split())
         pending = " ".join(unconfirmed) if any(unconfirmed) else current
         commits: list[TranscriptCommit] = []
+        if self.baseline_pending:
+            self.baseline_pending = False
+            self.committed_words = list(confirmed_words)
+            self._baseline = len(confirmed_words)
         total_confirmed = self._align_reprint(confirmed_words) if confirmed_words else tuple(self.committed_words)
         new_words = tuple(total_confirmed[len(self.committed_words):])
         if new_words:

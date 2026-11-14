@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from .models import Turn
 
 QUESTION_START = re.compile(
-    r"^\s*(who|what|when|where|why|how|which|whose|can|could|should|would|do|does|did|is|are|was|were|will)\b",
+    r"^\s*(who|what|when|where|why|how|which|whose|can|could|should|would|do|does|did|is|are|was|were|will|"
+    r"have|has|may|might|shall|any|anyone|anybody|thoughts|tell me|explain|describe|wonder)\b",
     re.IGNORECASE,
 )
 

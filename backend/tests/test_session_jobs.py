@@ -55,3 +55,19 @@ def test_live_captions_are_attributed_when_faces_share_the_session_clock() -> No
     assert captions[-1]["speakerId"] == "p1"
     assert any(m["type"] == "active_speaker" and m["personId"] == "p1" for m in messages)
     assert any(m["type"] == "map" for m in messages)
+
+
+def test_uncalibrated_camera_seats_people_along_the_far_edge() -> None:
+    from backend.app.calibration import Calibration
+    from backend.app.fake_session import FAKE_CORNERS, FAKE_TABLE
+    from backend.app.geometry import Point
+    from backend.app.session import SessionEngine
+
+    engine = SessionEngine()
+    engine.set_calibration(Calibration(FAKE_CORNERS, FAKE_TABLE))
+    engine.use_horizontal_seating()
+    # A laptop camera sees shoulders mid-frame, where the default table projection fails.
+    left = engine.tracker.seat_mapper(Point(0.25, 0.55))
+    right = engine.tracker.seat_mapper(Point(0.75, 0.6))
+    assert (left.x, left.y) == (0.45, -0.45)
+    assert (right.x, right.y) == (1.35, -0.45)

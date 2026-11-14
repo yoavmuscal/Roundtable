@@ -118,6 +118,8 @@ export interface StatusPayload {
   network: NetworkState;
   backend: BackendMode;
   connected: boolean;
+  /** Argmax streaming transcriber: off, loading (model warming ~20 s) or listening. */
+  transcriberState?: 'off' | 'loading' | 'listening';
 }
 
 export interface RefinedPayload {
