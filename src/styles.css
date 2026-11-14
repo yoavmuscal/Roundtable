@@ -206,7 +206,6 @@ kbd {
   box-shadow: var(--shadow);
   transition: box-shadow 150ms ease;
 }
-}
 .camera-feed { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--stage); }
 .media-present .dot-grid { opacity: 0.25; }
 .media-present .stage-horizon, .media-present .table-plane { display: none; }
