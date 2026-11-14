@@ -287,14 +287,14 @@ class SessionEngine:
     async def ask(self, text: str, timeout_s: float = 8.0) -> dict[str, Any]:
         if self.bonsai is None:
             cited = [turn.id for turn in self.turns[-2:]]
-            return self._message(self.clock(), "answer", text="Bonsai is unavailable; showing the most recent relevant turns.", citedTurnIds=cited)
+            return self._message(self.clock(), "answer", question=text, text="Bonsai is unavailable; showing the most recent relevant turns.", citedTurnIds=cited)
         result = await self.bonsai.submit(
             "ask",
             {"question": text, "turns": [turn.as_dict() for turn in self.turns]},
             ANSWER_SCHEMA,
             timeout_s,
         )
-        return self._message(self.clock(), "answer", text=result["text"], citedTurnIds=result["citedTurnIds"])
+        return self._message(self.clock(), "answer", question=text, text=result["text"], citedTurnIds=result["citedTurnIds"])
 
     async def tag_turns(self, turns: list[Turn], timeout_s: float = 4.0) -> list[Turn]:
         if self.bonsai is None:

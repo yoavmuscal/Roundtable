@@ -304,15 +304,24 @@ def create_app(
             if mode == "sim":
                 if not (sim_session_dir / "events.jsonl").exists():
                     generate_session(sim_session_dir, include_video=True)
-                app.state.engine = create_simulation_engine(sim_session_dir, session_dir)
+                app.state.engine = create_simulation_engine(sim_session_dir, session_dir, bonsai=app.state.bonsai)
                 speed = float(message.get("speed", 1.0))
 
                 async def emit(item: dict[str, Any]) -> None:
                     await broadcast(item)
 
-                app.state.sim_task = asyncio.create_task(
-                    run_simulation(sim_session_dir, emit=emit, speed=speed, output_dir=session_dir)
-                )
+                async def run_and_refine() -> None:
+                    await run_simulation(
+                        sim_session_dir,
+                        emit=emit,
+                        speed=speed,
+                        output_dir=session_dir,
+                        engine=app.state.engine,
+                    )
+                    # A replay that runs to its end refines exactly like a manual Stop.
+                    await refine_after_stop()
+
+                app.state.sim_task = asyncio.create_task(run_and_refine())
             else:
                 if message.get("value"):
                     try:
@@ -330,6 +339,9 @@ def create_app(
         elif action == "stop":
             if app.state.sim_task and not app.state.sim_task.done():
                 app.state.sim_task.cancel()
+                app.state.sim_task = None
+            if current.phase == "review":
+                return
             if app.state.audio_monitor is not None:
                 await app.state.audio_monitor.stop()
                 app.state.audio_monitor = None

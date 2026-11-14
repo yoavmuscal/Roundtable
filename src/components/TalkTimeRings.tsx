@@ -1,7 +1,7 @@
 import { percentage } from '../lib/map';
 import { useRoundtableStore } from '../state/store';
 
-const RADIUS = 27;
+const RADIUS = 25;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 export function TalkTimeRings() {
@@ -18,20 +18,21 @@ export function TalkTimeRings() {
           const share = shares.find((item) => item.personId === person.id)?.share ?? 0;
           return (
             <div key={person.id} className="talk-person">
-              <svg viewBox="0 0 72 72" role="img" aria-label={`${person.name} spoke ${percentage(share)}`}>
-                <circle cx="36" cy="36" r={RADIUS} fill="none" stroke="#252C38" strokeWidth="8" />
+              <svg viewBox="0 0 64 64" role="img" aria-label={`${person.name} spoke ${percentage(share)}`}>
+                <circle cx="32" cy="32" r={RADIUS} fill="none" stroke="#252c38" strokeWidth="5" />
                 <circle
-                  cx="36"
-                  cy="36"
+                  cx="32"
+                  cy="32"
                   r={RADIUS}
                   fill="none"
                   stroke={person.color}
-                  strokeWidth="8"
+                  strokeWidth="5"
                   strokeLinecap="round"
                   strokeDasharray={`${share * CIRCUMFERENCE} ${CIRCUMFERENCE}`}
-                  transform="rotate(-90 36 36)"
+                  transform="rotate(-90 32 32)"
+                  style={{ transition: 'stroke-dasharray 300ms ease' }}
                 />
-                <text x="36" y="40" textAnchor="middle">{percentage(share)}</text>
+                <text x="32" y="36.5" textAnchor="middle">{percentage(share)}</text>
               </svg>
               <span>{person.name}</span>
             </div>

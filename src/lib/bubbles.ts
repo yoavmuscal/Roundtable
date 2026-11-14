@@ -33,7 +33,8 @@ function intersects(a: Box, b: Box): boolean {
 }
 
 function candidateForMode(anchor: Point, mode: AnchorMode, size: Size, stage: Size): Box {
-  const gap = mode === 'chest' ? 18 : 12;
+  // Head placement clears the name tag drawn above the face bracket (build guide 6.10).
+  const gap = mode === 'chest' ? 18 : mode === 'head' ? 44 : 12;
   let x = anchor.x - size.width / 2;
   let y = anchor.y - size.height - gap;
   if (mode === 'chest') y = anchor.y + gap;
@@ -64,13 +65,17 @@ export function layoutBubbles(
     0,
     ...Array.from(captionsByPerson.values()).map((caption) => caption.end ?? caption.start),
   );
-  const faceBoxes = frames.map((frame) => ({
-    x: frame.faceBox.x * stage.width,
-    y: frame.faceBox.y * stage.height,
-    width: frame.faceBox.width * stage.width,
-    height: frame.faceBox.height * stage.height,
-  }));
-  const occupied: Box[] = [...faceBoxes];
+  // Keep bubbles off every face bracket and every name tag, not just the raw face box.
+  const occupied: Box[] = frames.flatMap((frame) => {
+    const faceWidth = frame.faceBox.width * stage.width;
+    const faceHeight = frame.faceBox.height * stage.height;
+    const centerX = (frame.faceBox.x + frame.faceBox.width / 2) * stage.width;
+    const centerY = (frame.faceBox.y + frame.faceBox.height / 2) * stage.height;
+    const head = Math.max(faceWidth, faceHeight) * 1.3;
+    const bracket = { x: centerX - (head + 40) / 2, y: centerY - (head + 36) / 2, width: head + 40, height: head + 36 };
+    const tag = { x: centerX - 48, y: centerY - head / 2 - 52, width: 96, height: 26 };
+    return [bracket, tag];
+  });
   const modes: AnchorMode[] = ['chest', 'head', 'right', 'left', 'top'];
 
   return frames.flatMap((frame) => {

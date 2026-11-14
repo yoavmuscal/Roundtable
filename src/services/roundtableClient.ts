@@ -1,4 +1,4 @@
-import type { CalibrationPayload, ClientMessage, ServerMessage } from '../contract';
+import type { CalibrationPayload, ClientMessage, Phase, ServerMessage } from '../contract';
 import { CONTRACT_VERSION } from '../contract';
 import { estimateClockOffset, type ClockSample } from '../lib/clockSync';
 import { useRoundtableStore } from '../state/store';
@@ -12,6 +12,9 @@ class RoundtableClient {
   private samples: ClockSample[] = [];
   private manuallyClosed = false;
   private connectionGeneration = 0;
+  private handshakePending = false;
+  /** Screen requested in the URL; wins over the backend's remembered phase on connect. */
+  pinnedPhase?: Phase;
 
   connect(): void {
     if (
@@ -65,6 +68,7 @@ class RoundtableClient {
     socket.addEventListener('open', () => {
       if (generation !== this.connectionGeneration) return;
       this.samples = [];
+      this.handshakePending = true;
       this.send({ type: 'hello', client: 'roundtable-ui', version: CONTRACT_VERSION });
       useRoundtableStore.getState().setConnected(true, 'Connected locally');
       this.startClockSync();
@@ -82,6 +86,17 @@ class RoundtableClient {
           }
           return;
         }
+        if (this.handshakePending && message.type === 'phase') {
+          // The hello reply carries the backend's remembered phase. A fresh page load
+          // honours the URL's screen, and never drops the user straight into an old Review.
+          const store = useRoundtableStore.getState();
+          const pinned = this.pinnedPhase;
+          this.pinnedPhase = undefined;
+          const phase = pinned ?? (message.phase === 'review' && !store.refined ? 'setup' : message.phase);
+          store.setPhase(phase);
+          return;
+        }
+        if (this.handshakePending && message.type === 'status') this.handshakePending = false;
         useRoundtableStore.getState().applyMessage(message);
       } catch (error) {
         console.error('Could not parse backend message', error);

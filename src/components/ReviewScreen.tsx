@@ -1,4 +1,8 @@
 import { FormEvent, useState } from 'react';
+
+function scrollCitedIntoView(node: HTMLElement | null) {
+  node?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
 import { formatClock } from '../lib/map';
 import { CaptionText } from '../lib/nameText';
 import { ShapeGlyph } from '../lib/shape';
@@ -75,7 +79,7 @@ export function ReviewScreen() {
         </form>
         {answer ? (
           <article className="inline-answer">
-            <strong>{answer.question}</strong>
+            {answer.question ? <strong>{answer.question}</strong> : null}
             <p>{answer.text}</p>
             <div className="citations">
               {answer.citedTurnIds.map((turnId) => <span key={turnId}>{turnId}</span>)}
@@ -93,7 +97,12 @@ export function ReviewScreen() {
           {turns.length ? turns.map((turn) => {
             const person = people.find((item) => item.id === turn.personId);
             return (
-              <article key={turn.id} id={turn.id} className="turn-row">
+              <article
+                key={turn.id}
+                id={turn.id}
+                className={answer?.citedTurnIds.includes(turn.id) ? 'turn-row cited' : 'turn-row'}
+                ref={answer?.citedTurnIds[0] === turn.id ? scrollCitedIntoView : undefined}
+              >
                 <div className="history-meta">
                   <ShapeGlyph shape={person?.shape ?? 'circle'} color={person?.color ?? '#8B7CF6'} />
                   <strong>{person?.name ?? 'Unknown'}</strong>

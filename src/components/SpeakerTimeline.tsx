@@ -4,6 +4,7 @@ import { useRoundtableStore } from '../state/store';
 
 const WINDOW_SECONDS = 90;
 const TICKS = Array.from({ length: 31 }, (_, index) => index * 3);
+const DOT_EVERY_SECONDS = 1.5;
 
 export function SpeakerTimeline() {
   const people = useRoundtableStore((state) => state.people);
@@ -15,11 +16,16 @@ export function SpeakerTimeline() {
     history.forEach((caption) => {
       if (!caption.personId) return;
       const times = grouped.get(caption.personId) ?? [];
-      times.push(caption.start, caption.end ?? caption.start);
+      const end = caption.end ?? caption.start;
+      for (let t = caption.start; t <= end + 1e-6; t += DOT_EVERY_SECONDS) times.push(t);
       grouped.set(caption.personId, times);
     });
     return grouped;
   }, [history]);
+
+  // The window slides once the session is longer than 90 s so "now" stays in view.
+  const windowStart = Math.max(0, sessionTime - WINDOW_SECONDS);
+  const position = (time: number) => ((time - windowStart) / WINDOW_SECONDS) * 100;
 
   return (
     <section className="speaker-timeline card" aria-label="Who spoke when">
@@ -38,17 +44,15 @@ export function SpeakerTimeline() {
               {TICKS.map((tick) => (
                 <i key={tick} style={{ left: `${(tick / WINDOW_SECONDS) * 100}%` }} />
               ))}
-              {(byPerson.get(person.id) ?? []).map((time, index) => (
-                <b
-                  key={`${time}-${index}`}
-                  style={{
-                    left: `${Math.min(100, (time / WINDOW_SECONDS) * 100)}%`,
-                    background: person.color,
-                    color: person.color,
-                  }}
-                />
-              ))}
-              <em className="now-line" style={{ left: `${Math.min(100, (sessionTime / WINDOW_SECONDS) * 100)}%` }} />
+              {(byPerson.get(person.id) ?? [])
+                .filter((time) => time >= windowStart)
+                .map((time, index) => (
+                  <b
+                    key={`${time}-${index}`}
+                    style={{ left: `${Math.min(100, position(time))}%`, background: person.color, color: person.color }}
+                  />
+                ))}
+              <em className="now-line" style={{ left: `${Math.min(100, position(sessionTime))}%` }} />
             </div>
           </div>
         ))}

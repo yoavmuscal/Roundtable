@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .bonsai import BonsaiWorker
 from .calibration import calibration_from_payload
 from .session import SessionEngine
 
@@ -34,9 +35,13 @@ def load_simulation_inputs(session_dir: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def create_simulation_engine(session_dir: Path, output_dir: Path | None = None) -> SessionEngine:
+def create_simulation_engine(
+    session_dir: Path,
+    output_dir: Path | None = None,
+    bonsai: BonsaiWorker | None = None,
+) -> SessionEngine:
     metadata = json.loads((session_dir / "metadata.json").read_text(encoding="utf-8"))
-    engine = SessionEngine(session_dir=output_dir)
+    engine = SessionEngine(session_dir=output_dir, bonsai=bonsai)
     engine.people = list(metadata["people"])
     engine.set_calibration(calibration_from_payload(metadata["calibration"]))
     engine.tracker.expected_people = len(engine.people)
@@ -50,8 +55,11 @@ async def run_simulation(
     emit: Emit | None = None,
     speed: float = 0.0,
     output_dir: Path | None = None,
+    engine: SessionEngine | None = None,
 ) -> SessionEngine:
-    engine = create_simulation_engine(session_dir, output_dir)
+    # The server passes its own engine so Stop, typed Q&A and refine see the
+    # same turns the simulation produced.
+    engine = engine or create_simulation_engine(session_dir, output_dir)
     rows = load_simulation_inputs(session_dir)
     previous_time = 0.0
     for message in engine.start():

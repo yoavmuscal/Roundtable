@@ -25,6 +25,7 @@ export default function App() {
     const requestedPhase = params.get('screen');
     if (requestedPhase === 'setup' || requestedPhase === 'enroll' || requestedPhase === 'live' || requestedPhase === 'review') {
       useRoundtableStore.getState().setPhase(requestedPhase);
+      roundtableClient.pinnedPhase = requestedPhase;
     }
     roundtableClient.connect();
     const stopBackgroundCompatibility = startBackgroundCompatibility();
